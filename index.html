@@ -199,6 +199,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
       <div class="card" style="padding:12px 14px">
         <div id="selhead"></div>
         <div id="hist" style="margin-top:8px"></div>
+        <div id="jobbox" style="margin-top:8px"></div>
         <div id="dupebox" style="margin-top:8px"></div>
         <div class="actions" style="margin-top:10px">
           <button class="b-app" id="bApp" onclick="act('approved')">✓ Approve</button>
@@ -454,7 +455,7 @@ const S = {
   pdf: null,        // pdfjs document
   pdfPageNum: 1, pdfPages: 0, zoom: 1, fitScale: 1,
   imp: { grid: null, hdr: -1, skip: 1, map: null, rows: [], pdfFile: null, xlsxName: "" },
-  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null,
+  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [],
 };
 
 function show(scr){
@@ -526,6 +527,7 @@ async function viewerBoot(token){
   }
   S.M = { id: "shared", building: data.building, period: data.period, rows: (data.data && data.data.rows) || [] };
   S.M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
+  S.jobs = [];
   S.prior = [];
   S.sel = 0; S.filter = "all";
   S.sharedPdfUrl = data.pdf || null;
@@ -949,6 +951,8 @@ async function openMonth(id){
   document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
   const all = await dbAll("months");
   S.prior = all.filter(m => m.building === M.building && m.period < M.period).sort((a,b) => b.period.localeCompare(a.period));
+  await loadJobs(M.building);
+  autoAssignJobs();
   $("hdrctx").textContent = M.building + " — " + moLabel(M.period);
   show("review");
   renderTable();
@@ -990,10 +994,14 @@ function renderTable(){
   const vis = visibleIdx();
   body.innerHTML = vis.map(i => {
     const r = S.M.rows[i];
-    const d = rowDelta(r);
     let tag = "";
-    if (d && d.prev === null) tag = ' <span class="tag-new">new</span>';
-    else if (d && d.pct !== null && d.pct !== 0) tag = ' <span class="'+(d.pct > 0 ? "delta-up" : "delta-dn")+'">'+(d.pct > 0 ? "+" : "")+d.pct+'%</span>';
+    if (r.jobId){
+      tag = ' <span title="Tracked as a job — progress shown on the right" style="font-size:11px">🏗</span>';
+    } else {
+      const d = rowDelta(r);
+      if (d && d.prev === null) tag = ' <span class="tag-new">new</span>';
+      else if (d && d.pct !== null && d.pct !== 0) tag = ' <span class="'+(d.pct > 0 ? "delta-up" : "delta-dn")+'">'+(d.pct > 0 ? "+" : "")+d.pct+'%</span>';
+    }
     const dupe = dupeMsgs(r, i);
     const noteCls = r.status === "question" ? "note-q" : "note-h";
     return '<tr class="'+(r.status ? "st-"+r.status : "")+(i === S.sel ? " sel" : "")+'" onclick="selectRow('+i+')">'
@@ -1056,9 +1064,10 @@ function renderRight(){
   });
   const nowT = vendorTotals(S.M.rows)[k];
   cells.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(nowT)+'</b></div></div>');
-  $("hist").innerHTML = (S.prior.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — total by month</div>' : "")
+  $("hist").innerHTML = r.jobId ? "" : (S.prior.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — total by month</div>' : "")
     + '<div class="histstrip">'+cells.join("")+'</div>'
     + priorInvoicesHtml(k);
+  renderJob(r);
   const dupe = dupeMsgs(r, S.sel);
   $("dupebox").innerHTML = dupe.map(m => {
     const info = /you marked|Also on/i.test(m) && !/twice/i.test(m);
@@ -1154,6 +1163,120 @@ async function saveNow(){
     try{ await dbPut("months", S.M); }
     catch(e){ toast("Couldn't save — check your internet connection. Your last change may not be stored."); }
   }
+}
+
+/* ---------- jobs / projects (contract tracking for contractors) ---------- */
+async function loadJobs(building){
+  const rec = await dbGet("kv", "jobs|" + vkey(building)).catch(() => null);
+  S.jobs = (rec && rec.v) || [];
+}
+function saveJobs(){
+  if (!S.M) return;
+  dbPut("kv", { k: "jobs|" + vkey(S.M.building), v: S.jobs }).catch(() => {});
+}
+function invBase(inv){
+  const s = String(inv || "").trim();
+  const m = s.match(/^(.*?)[-_ ]?\d+$/);
+  const b = (m ? m[1] : s).replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return b.length >= 3 ? b : "";
+}
+function jobInvoices(jobId){
+  const seen = new Map();
+  [...S.prior, S.M].forEach(mo => (mo.rows || []).forEach(r => {
+    if (r.jobId === jobId){
+      const key = vkey(r.vendor) + "|" + (normInv(r.inv) || (r.amount + "|" + r.date));
+      const e = seen.get(key);
+      if (!e) seen.set(key, { inv: r.inv, amount: r.amount, desc: r.desc, period: mo.period });
+      else e.period = mo.period;
+    }
+  }));
+  return [...seen.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
+}
+function autoAssignJobs(){
+  const baseMap = new Map();
+  [...S.prior, S.M].forEach(mo => (mo.rows || []).forEach(r => {
+    if (r.jobId){ const b = invBase(r.inv); if (b && !baseMap.has(b)) baseMap.set(b, { jobId: r.jobId, vendor: vkey(r.vendor) }); }
+  }));
+  let changed = false;
+  S.M.rows.forEach(r => {
+    if (!r.jobId){
+      const b = invBase(r.inv);
+      const hit = b && baseMap.get(b);
+      if (hit && hit.vendor === vkey(r.vendor) && S.jobs.some(j => j.id === hit.jobId)){ r.jobId = hit.jobId; changed = true; }
+    }
+  });
+  if (changed) saveSoon();
+}
+function renderJob(r){
+  const el = $("jobbox");
+  if (!el) return;
+  if (!S.jobs) S.jobs = [];
+  if (r.jobId){
+    const j = S.jobs.find(x => x.id === r.jobId);
+    if (!j){ if (!S.readonly) r.jobId = null; el.innerHTML = ""; return; }
+    const invs = jobInvoices(j.id);
+    const billed = invs.reduce((s, x) => s + x.amount, 0);
+    el.innerHTML = '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+      + '🏗 <b>' + esc(j.name) + '</b>'
+      + (S.readonly ? (j.budget ? ' · contract $' + fmt(j.budget) : '') : ' · <a href="#" onclick="editJobBudget(\'' + j.id + '\');return false">' + (j.budget ? 'contract $' + fmt(j.budget) : 'set contract total') + '</a>')
+      + '<div style="margin-top:4px">Billed so far on this job: <b>$' + fmt(billed) + '</b> (' + invs.length + ' invoice' + (invs.length > 1 ? 's' : '') + ', incl. this one)'
+      + (j.budget ? ' — ' + Math.round(billed / j.budget * 100) + '% of contract, $' + fmt(Math.max(j.budget - billed, 0)) + ' left' : '') + '</div>'
+      + (j.budget && billed > j.budget + 0.005 ? '<div style="color:var(--red);margin-top:2px">⚠️ Billing has passed the contract total by $' + fmt(billed - j.budget) + '</div>' : '')
+      + '<div style="margin-top:4px">' + invs.map(x => '<span style="margin-right:10px;white-space:nowrap;' + (normInv(x.inv) === normInv(r.inv) && x.amount === r.amount ? 'font-weight:600' : '') + '">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>').join("") + '</div>'
+      + (S.readonly ? '' : '<div style="margin-top:4px" class="small"><a href="#" onclick="unassignJob();return false">remove from job</a></div>')
+      + '</div>';
+    return;
+  }
+  if (S.readonly){ el.innerHTML = ""; return; }
+  const vendorJobs = S.jobs.filter(j => j.vendor === vkey(r.vendor));
+  const b = invBase(r.inv);
+  let suggested = null;
+  if (b){
+    outer:
+    for (const mo of [...S.prior, S.M]){
+      for (const x of (mo.rows || [])){
+        if (x.jobId && vkey(x.vendor) === vkey(r.vendor) && invBase(x.inv) === b){
+          suggested = S.jobs.find(jj => jj.id === x.jobId) || null;
+          if (suggested) break outer;
+        }
+      }
+    }
+  }
+  el.innerHTML = '<div class="small muted" style="margin:2px 0">'
+    + (suggested ? '🏗 Looks like part of <b style="color:var(--tx)">' + esc(suggested.name) + '</b> <button style="padding:1px 8px;font-size:12px" onclick="assignJob(\'' + suggested.id + '\')">Link it</button> · ' : '🏗 ')
+    + (vendorJobs.length ? '<select id="jobsel" style="height:26px;font-size:12px;max-width:180px">' + vendorJobs.map(j => '<option value="' + j.id + '">' + esc(j.name) + '</option>').join("") + '</select> <button style="padding:1px 8px;font-size:12px" onclick="assignJob(document.getElementById(\'jobsel\').value)">Add to job</button> · ' : '')
+    + '<a href="#" onclick="newJob();return false">track as a job/project</a></div>';
+}
+function assignJob(id){
+  const r = S.M.rows[S.sel];
+  if (!r || !id) return;
+  r.jobId = id;
+  saveSoon(); renderRight(); renderTable();
+}
+function unassignJob(){
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.jobId = null;
+  saveSoon(); renderRight(); renderTable();
+}
+function newJob(){
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  const name = (prompt("Name this job/project (e.g. Suite 240 renovation):", (r.desc || "").slice(0, 40)) || "").trim();
+  if (!name) return;
+  const bud = toNum(prompt("Contract / quoted total for this job (optional — leave blank if unknown):") || "");
+  const j = { id: "j" + Date.now().toString(36), vendor: vkey(r.vendor), name, budget: bud || null };
+  S.jobs.push(j);
+  saveJobs();
+  r.jobId = j.id;
+  saveSoon(); renderRight(); renderTable();
+}
+function editJobBudget(id){
+  const j = S.jobs.find(x => x.id === id);
+  if (!j) return;
+  const bud = toNum(prompt("Contract / quoted total for “" + j.name + "”:", j.budget || "") || "");
+  j.budget = bud || null;
+  saveJobs(); renderRight();
 }
 
 /* ---------- PDF viewer ---------- */
