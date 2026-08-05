@@ -1,0 +1,1474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payables review</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+:root{
+  --bg:#f5f4f0; --card:#fff; --border:#e2e0da; --border2:#c9c7c0;
+  --tx:#1a1a18; --tx2:#6b6a64; --tx3:#9a988f;
+  --green-bg:#e3f2e1; --green:#256b34; --green-line:#a9d3ab;
+  --orange-bg:#fdecd4; --orange:#8a4b08; --orange-line:#eec488;
+  --red:#b3261e; --red-bg:#fbe9e7;
+  --blue:#1a5fa8; --blue-bg:#e7f0fa;
+  --radius:8px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);}
+button{font:inherit;color:var(--tx);background:#fff;border:1px solid var(--border2);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:#f2f1ec}
+button.primary{background:#1a1a18;color:#fff;border-color:#1a1a18}
+button.primary:hover{background:#3a3a36}
+button:disabled{opacity:.45;cursor:default}
+input,select,textarea{font:inherit;border:1px solid var(--border2);border-radius:6px;padding:6px 10px;background:#fff;color:var(--tx)}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid #8ab4e8;outline-offset:1px}
+header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;font-weight:600;margin:0}
+.muted{color:var(--tx2)} .small{font-size:12px}
+main{padding:18px;max-width:1500px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.hidden{display:none!important}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;border:1px solid var(--border2);background:#fff;cursor:pointer}
+.chip.on{background:#1a1a18;color:#fff;border-color:#1a1a18}
+.monthcard{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius);background:#fff;margin-bottom:8px;cursor:pointer}
+.monthcard:hover{border-color:var(--border2)}
+.bar{height:6px;border-radius:3px;background:#eceae4;width:160px;overflow:hidden}
+.bar>i{display:block;height:100%;background:#256b34}
+table.rev{width:100%;border-collapse:collapse;font-size:13px}
+table.rev th{position:sticky;top:0;background:#faf9f6;text-align:left;font-weight:600;font-size:12px;color:var(--tx2);padding:7px 8px;border-bottom:1px solid var(--border2);z-index:1}
+table.rev td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+table.rev tr.sel td{box-shadow:inset 3px 0 0 var(--blue)}
+table.rev tr{cursor:pointer}
+table.rev tr:hover td{background:rgba(0,0,0,.025)}
+tr.st-approved td{background:var(--green-bg)!important}
+tr.st-hold td{background:var(--orange-bg)!important}
+.note-q{color:var(--red);font-weight:500}
+.note-h{color:var(--orange);font-weight:500}
+.delta-up{color:var(--red);font-size:11px;font-weight:600}
+.delta-dn{color:var(--green);font-size:11px;font-weight:600}
+.tag-new{color:var(--orange);font-size:11px;font-weight:600}
+.split{display:grid;grid-template-columns:minmax(400px,1fr) minmax(460px,1.25fr);gap:14px;align-items:start}
+body.pdfmax #leftcol{display:none}
+body.pdfmax .split{grid-template-columns:1fr}
+body.pdfmax .rightpane{position:static;max-height:none}
+body.pdfmax #pdfwrap{min-height:calc(100vh - 330px)}
+.leftpane{max-height:calc(100vh - 130px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius);background:#fff}
+.rightpane{position:sticky;top:64px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 130px)}
+.histstrip{display:flex;gap:8px;flex-wrap:wrap}
+.histcell{background:#faf9f6;border:1px solid var(--border);border-radius:6px;padding:5px 12px;text-align:center;min-width:70px}
+.histcell.now{background:var(--blue-bg);border-color:#b7cfe8}
+.histcell .m{font-size:11px;color:var(--tx3)} .histcell.now .m{color:var(--blue)}
+.warn{background:var(--red-bg);border:1px solid #f0c4c0;color:var(--red);border-radius:6px;padding:7px 11px;font-size:12.5px}
+.info{background:var(--blue-bg);border:1px solid #c3d8ee;color:var(--blue);border-radius:6px;padding:7px 11px;font-size:12.5px}
+#pdfwrap{flex:1;min-height:300px;overflow:auto;background:#8d8b85;border-radius:var(--radius);border:1px solid var(--border2);text-align:center}
+#pdfcanvas{margin:10px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.35);display:inline-block}
+.pdfctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pdfctl button{padding:4px 9px}
+.actions{display:flex;gap:8px}
+.actions button{flex:1;padding:9px 4px;font-weight:500}
+.actions .b-app.on{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.actions .b-q.on{background:var(--red-bg);border-color:#f0c4c0;color:var(--red)}
+.actions .b-hold.on{background:var(--orange-bg);border-color:var(--orange-line);color:var(--orange)}
+.dropzone{border:2px dashed var(--border2);border-radius:var(--radius);padding:22px;text-align:center;color:var(--tx2);background:#fff;cursor:pointer}
+.dropzone.has{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.maprow{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin-bottom:8px}
+.preview{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:6px}
+.preview table{width:100%;border-collapse:collapse;font-size:12px}
+.preview td,.preview th{padding:4px 8px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+kbd{background:#f0efe9;border:1px solid var(--border2);border-radius:4px;padding:0 5px;font-size:11px;font-family:inherit}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#1a1a18;color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50}
+.rowmeta{font-size:11.5px;color:var(--tx2)}
+#ocrbar{font-size:12px;color:var(--tx2)}
+.desc-cell{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:980px){ .split{grid-template-columns:1fr} .rightpane{position:static;max-height:none} }
+body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonly #btnLink,body.readonly #ocrbar{display:none!important}
+</style>
+</head>
+<body>
+
+<header>
+  <h1 style="cursor:pointer" onclick="goHome()">Payables review</h1>
+  <span id="hdrctx" class="muted small"></span>
+  <span style="flex:1"></span>
+  <span id="hdrprog" class="muted small"></span>
+  <button id="btnPrev" class="hidden" onclick="applyPrevDecisions()" title="Copy your approve/hold/question decisions from earlier months for invoices that are carried over unchanged">Apply last month's decisions</button>
+  <button id="btnShare" class="hidden" onclick="shareMonth()" title="Create a private read-only link you can send to someone — no login needed on their side">🔗 Share</button>
+  <button id="btnExport" class="hidden primary" onclick="exportXlsx()">Export for manager (.xlsx)</button>
+  <span id="useremail" class="muted small"></span>
+  <button id="btnOut" class="hidden" onclick="doLogout()">Sign out</button>
+</header>
+
+<main id="scr-login" class="hidden">
+  <div class="card" style="max-width:380px;margin:70px auto">
+    <h2 style="margin-top:0;font-size:18px">Sign in</h2>
+    <input id="liEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px" autocomplete="username">
+    <input id="liPass" type="password" placeholder="Password" style="width:100%;margin-bottom:10px" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="primary" style="width:100%" onclick="doLogin()">Sign in</button>
+    <div id="liErr" class="small" style="color:var(--red);margin-top:8px"></div>
+    <p class="small muted" style="margin-bottom:0">New logins are created by the account owner in the Supabase dashboard — see the setup guide.</p>
+  </div>
+</main>
+
+<main id="scr-home">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <h2 style="margin:0;font-size:18px">Your buildings</h2>
+    <div style="display:flex;gap:8px">
+      <button onclick="exportBackup()" title="Download everything (all packages, statuses, notes) as one file">⬇ Backup</button>
+      <button onclick="document.getElementById('fBak').click()" title="Load a backup file made with the ⬇ Backup button — e.g. to move your work from the local file version">⬆ Import backup</button>
+      <input type="file" id="fBak" accept=".json,application/json" class="hidden">
+      <button onclick="addBuilding()">+ Add building</button>
+      <button class="primary" onclick="goImport()">+ New month</button>
+    </div>
+  </div>
+  <div id="homelist"></div>
+  <p class="muted small" style="margin-top:18px">Everything is saved to your private account automatically — you can sign in from any computer and pick up where you left off.</p>
+</main>
+
+<main id="scr-import" class="hidden">
+  <div class="card" style="max-width:760px;margin:0 auto">
+    <h2 style="margin-top:0;font-size:18px">New month</h2>
+    <div style="display:grid;grid-template-columns:1fr 200px;gap:10px;margin-bottom:12px">
+      <div>
+        <label class="small muted">Building</label><br>
+        <select id="inBuilding" style="width:100%" onchange="bldChanged()"></select>
+        <input id="inBuildingNew" class="hidden" placeholder="New building name" style="width:100%;margin-top:6px" oninput="importValidate()">
+      </div>
+      <div>
+        <label class="small muted">As-of date</label><br>
+        <input id="inPeriod" type="date" style="width:100%">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="dropzone" id="dzX" onclick="document.getElementById('fX').click()">
+        <b>Aging spreadsheet</b><br><span class="small">click or drop .xlsx here</span>
+        <input type="file" id="fX" accept=".xlsx,.xls,.csv" class="hidden">
+      </div>
+      <div class="dropzone" id="dzP" onclick="document.getElementById('fP').click()">
+        <b>Invoice backup</b><br><span class="small">click or drop .pdf here (optional)</span>
+        <input type="file" id="fP" accept=".pdf" class="hidden">
+      </div>
+    </div>
+    <p class="small" style="margin:0 0 12px"><a href="#" onclick="pdfOnlyStart();return false" style="color:var(--blue)">No spreadsheet? If the summary list is a page inside the PDF, click here and I'll read it from there</a></p>
+    <div id="gridbox" class="hidden">
+      <h3 style="font-size:14px;margin:14px 0 6px">Lines read from page <span id="gridpg"></span> — check them against the page</h3>
+      <p class="small muted" style="margin-top:0">Reading a scan isn't perfect: fix wording, fill in missing invoice #s, delete junk lines. Fix Amount and HST and the Total fills itself — the Lines total below should match the TOTAL on the page.</p>
+      <div class="preview" id="gridtable" style="max-height:340px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <button onclick="gridAddRow()">+ Add line</button>
+        <span class="small">Lines total: <b id="gridtotal"></b> — should match the TOTAL on the page</span>
+      </div>
+    </div>
+    <div id="mapbox" class="hidden">
+      <h3 style="font-size:14px;margin:14px 0 8px">Check the columns</h3>
+      <p class="small muted" style="margin-top:0">I guessed which column is which. Fix any that are wrong — the choice is remembered for this building.</p>
+      <div id="maprows"></div>
+      <h3 style="font-size:14px;margin:14px 0 6px">Preview — <span id="pvcount"></span></h3>
+      <div class="preview" id="pvtable"></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button onclick="goHome()">Cancel</button>
+      <button class="primary" id="btnStart" disabled onclick="startReview()">Start review</button>
+    </div>
+  </div>
+</main>
+
+<main id="scr-review" class="hidden" style="max-width:1500px">
+  <div class="split">
+    <div id="leftcol">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+        <span class="chip on" data-f="all" onclick="setFilter('all')">All</span>
+        <span class="chip" data-f="open" onclick="setFilter('open')">Unreviewed</span>
+        <span class="chip" data-f="flag" onclick="setFilter('flag')">Questions & holds</span>
+        <span style="flex:1"></span>
+        <span class="muted small"><kbd>↑</kbd><kbd>↓</kbd> rows · <kbd>A</kbd> approve · <kbd>Q</kbd> question · <kbd>H</kbd> hold · <kbd>←</kbd><kbd>→</kbd> pages</span>
+      </div>
+      <div class="leftpane">
+        <table class="rev">
+          <thead><tr><th style="width:26%">Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th><th style="width:20%">Notes</th></tr></thead>
+          <tbody id="revbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="rightpane">
+      <div class="card" style="padding:12px 14px">
+        <div id="selhead"></div>
+        <div id="hist" style="margin-top:8px"></div>
+        <div id="dupebox" style="margin-top:8px"></div>
+        <div class="actions" style="margin-top:10px">
+          <button class="b-app" id="bApp" onclick="act('approved')">✓ Approve</button>
+          <button class="b-q" id="bQ" onclick="act('question')">? Question</button>
+          <button class="b-hold" id="bHold" onclick="act('hold')">⏸ Hold</button>
+        </div>
+        <textarea id="noteinp" rows="2" placeholder="Note for the manager…" style="width:100%;margin-top:8px;resize:vertical" oninput="noteChanged()"></textarea>
+      </div>
+      <div id="pglinks" class="small muted"></div>
+      <div class="pdfctl">
+        <button onclick="pdfPage(-1)" title="Previous page">◀</button>
+        <span id="pglabel" class="small muted">– / –</span>
+        <button onclick="pdfPage(1)" title="Next page">▶</button>
+        <button onclick="pdfZoom(-1)">−</button>
+        <button onclick="pdfZoom(1)">+</button>
+        <button onclick="pdfFit()">Fit</button>
+        <button id="btnMax" onclick="togglePdfMax()" title="Hide the table so the invoice fills the screen — arrows and A/Q/H still work">⛶ Bigger</button>
+        <button id="btnPop" onclick="popOut()" title="Open the invoice in its own window — drag it to your second screen; it follows along as you click lines">🗗 Second window</button>
+        <button id="btnLink" onclick="linkPage()" title="Remember that this PDF page belongs to the selected line">📎 Link page to row</button>
+        <button id="btnOcr" onclick="runOcr()" title="Reads the scanned pages and automatically links each line to its invoice page">✨ Auto-match pages</button>
+      </div>
+      <div id="ocrbar"></div>
+      <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px">No backup PDF attached to this package.<br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ---------- Supabase connection ----------
+   Replace the two values below with YOUR project's values
+   (Supabase dashboard → Project Settings → API). If you skip this,
+   the site will ask for them once per computer instead. */
+const SUPABASE_URL = "https://dcqqkwqlnaxgndotxorv.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_Tw_wP6oUWAqkC1dZpdm6Yg_y3zeR_oC";
+
+let sb = null;
+(function initSb(){
+  let u = SUPABASE_URL, k = SUPABASE_ANON_KEY;
+  if (u.indexOf("PASTE") === 0){
+    u = localStorage.getItem("sb_url") || "";
+    k = localStorage.getItem("sb_key") || "";
+    if (!u || !k){
+      u = (prompt("One-time setup on this computer.\n\nPaste your Supabase Project URL (looks like https://xxxx.supabase.co):") || "").trim();
+      k = (prompt("Paste your Supabase anon public key:") || "").trim();
+      if (u && k){ localStorage.setItem("sb_url", u); localStorage.setItem("sb_key", k); }
+    }
+  }
+  if (u && k){ try{ sb = supabase.createClient(u, k); } catch(e){ console.error(e); } }
+})();
+
+/* ---------- data layer (Supabase-backed, same interface as before) ---------- */
+const _cache = { months: null };
+const _pdfBlobCache = {};
+async function dbAll(st){
+  if (st === "months"){
+    if (_cache.months) return _cache.months;
+    const { data, error } = await sb.from("months").select("*");
+    if (error) throw error;
+    _cache.months = data.map(r => ({ id: r.id, building: r.building, period: r.period, savedAt: r.saved_at, ...(r.data || {}) }));
+    return _cache.months;
+  }
+  const { data, error } = await sb.from(st).select("*");
+  if (error) throw error;
+  return data;
+}
+async function dbGet(st, key){
+  if (st === "months"){
+    const all = await dbAll("months");
+    return all.find(m => m.id === key);
+  }
+  if (st === "pdfs"){
+    const meta = await dbGet("kv", "pdfmeta|" + key);
+    if (!meta || !meta.v || !meta.v.exists) return undefined;
+    if (!_pdfBlobCache[key]){
+      const { data, error } = await sb.storage.from("pdfs").download(key + ".pdf");
+      if (error) return undefined;
+      _pdfBlobCache[key] = data;
+    }
+    return { id: key, blob: _pdfBlobCache[key], name: meta.v.name || "", ocr: meta.v.ocr || null };
+  }
+  const { data, error } = await sb.from("kv").select("*").eq("k", key).maybeSingle();
+  if (error) throw error;
+  return data || undefined;
+}
+async function dbPut(st, v){
+  if (st === "months"){
+    _cache.months = null;
+    const { id, building, period, savedAt, ...rest } = v;
+    const { error } = await sb.from("months").upsert({ id, building, period, data: rest, saved_at: new Date().toISOString() });
+    if (error) throw error;
+    return;
+  }
+  if (st === "pdfs"){
+    if (v.blob){
+      const { error } = await sb.storage.from("pdfs").upload(v.id + ".pdf", v.blob, { upsert: true, contentType: "application/pdf" });
+      if (error) throw error;
+      _pdfBlobCache[v.id] = v.blob;
+    }
+    const prev = await dbGet("kv", "pdfmeta|" + v.id);
+    await dbPut("kv", { k: "pdfmeta|" + v.id, v: { exists: true, name: v.name || (prev && prev.v && prev.v.name) || "", ocr: v.ocr || (prev && prev.v && prev.v.ocr) || null } });
+    return;
+  }
+  const { error } = await sb.from("kv").upsert(v);
+  if (error) throw error;
+}
+async function dbDel(st, key){
+  if (st === "pdfs"){
+    await sb.storage.from("pdfs").remove([key + ".pdf"]);
+    await dbDel("kv", "pdfmeta|" + key);
+    delete _pdfBlobCache[key];
+    return;
+  }
+  if (st === "months") _cache.months = null;
+  const col = st === "kv" ? "k" : "id";
+  const { error } = await sb.from(st).delete().eq(col, key);
+  if (error) throw error;
+}
+
+/* ---------- utilities ---------- */
+const $ = id => document.getElementById(id);
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.style.opacity=1; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity=0, 2600); }
+function fmt(n){ return Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function vkey(name){ return String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,14); }
+function normInv(inv){ const s=String(inv||"").toLowerCase().replace(/[^a-z0-9]/g,""); return s.length>=3 ? s : ""; }
+function moLabel(period){
+  const p = String(period).split("-");
+  if (p.length >= 3) return new Date(+p[0], +p[1]-1, +p[2]).toLocaleString("en-US",{month:"short", day:"numeric", year:"numeric"});
+  return new Date(+p[0], +p[1]-1, 1).toLocaleString("en-US",{month:"short", year:"numeric"});
+}
+
+/*PARSE-START*/
+function detectPeriod(grid, filename){
+  const yr = y => { y = +y; return y < 100 ? 2000 + y : y; };
+  const pad = m => String(+m).padStart(2, "0");
+  let monthOnly = null;
+  for (let i = 0; i < Math.min(grid.length, 12); i++){
+    for (const c of (grid[i] || [])){
+      if (c instanceof Date && !isNaN(c) && c.getFullYear() > 2000) return c.getFullYear() + "-" + pad(c.getMonth() + 1) + "-" + pad(c.getDate());
+      if (typeof c !== "string") continue;
+      let m = c.match(/as\s*of\s*[:\s]*([01]?\d)[\/\-.](\d{1,2})[\/\-.](\d{2,4})/i);
+      if (m && +m[1] >= 1 && +m[1] <= 12) return yr(m[3]) + "-" + pad(m[1]) + "-" + pad(m[2]);
+      m = c.match(/period[:\s]*([01]?\d)\s*[\/\-.]\s*(\d{2,4})/i);
+      if (m && +m[1] >= 1 && +m[1] <= 12 && !monthOnly) monthOnly = yr(m[2]) + "-" + pad(m[1]);
+    }
+  }
+  const m = String(filename || "").match(/([01]?\d)[.\-\/](\d{1,2})[.\-\/](\d{2,4})/);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return yr(m[3]) + "-" + pad(m[1]) + "-" + pad(m[2]);
+  return monthOnly;
+}
+function toNum(v){
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  if (typeof v === "string"){
+    let s = v.replace(/[$,\s]/g,"");
+    let neg = /^\(.*\)$/.test(s); if (neg) s = s.slice(1,-1);
+    const n = parseFloat(s);
+    return isNaN(n) ? null : (neg ? -n : n);
+  }
+  return null;
+}
+function fmtDate(v){
+  if (v == null || v === "") return "";
+  if (v instanceof Date && !isNaN(v)) return (v.getMonth()+1)+"/"+v.getDate()+"/"+v.getFullYear();
+  if (typeof v === "number" && v > 20000 && v < 60000){
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return (d.getUTCMonth()+1)+"/"+d.getUTCDate()+"/"+d.getUTCFullYear();
+  }
+  return String(v).replace(/\s*0?0:00:00.*$/,"").trim();
+}
+function detectHeader(rows){
+  const kws = [/payee|vendor|name|supplier/i, /invoice|inv\b|ref/i, /date/i, /current|amount|owed|total|balance|due/i];
+  let best = 1, bi = -1;
+  for (let i = 0; i < Math.min(rows.length, 30); i++){
+    const r = rows[i] || [];
+    let s = 0;
+    kws.forEach(k => { if (r.some(c => typeof c === "string" && k.test(c))) s++; });
+    const nonEmpty = r.filter(c => c !== null && c !== "").length;
+    if (s > best && nonEmpty >= 3){ best = s; bi = i; }
+  }
+  return bi;
+}
+function colLabels(rows, h){
+  const width = Math.max(...rows.slice(Math.max(0,h), h+3).map(r => (r||[]).length), 1);
+  const isCont = i => {
+    const r = rows[i] || [];
+    const texts = r.filter(c => typeof c === "string" && c.trim()).length;
+    const nums = r.filter(c => typeof c === "number").length;
+    return nums === 0 && texts > 0 && texts <= width/2;
+  };
+  const use = [h];
+  if (isCont(h+1)){ use.push(h+1); if (isCont(h+2)) use.push(h+2); }
+  const out = [];
+  for (let j = 0; j < width; j++){
+    const parts = [];
+    use.forEach(i => { const v = (rows[i]||[])[j]; if (typeof v === "string" && v.trim()) parts.push(v.trim()); });
+    out.push(parts.join(" "));
+  }
+  return { labels: out, skip: use.length };
+}
+function autoMap(labels){
+  const find = res => { for (const re of res){ const i = labels.findIndex(l => re.test(l)); if (i >= 0) return i; } return -1; };
+  return {
+    vendor: find([/payee\s*name/i, /vendor\s*name/i, /supplier/i, /vendor/i, /payee/i, /^name$/i, /name/i]),
+    inv:    find([/invoice\s*#/i, /inv(oice)?\s*(no|num)/i, /invoice$/i, /reference/i, /^inv/i]),
+    date:   find([/invoice\s*date/i, /^date/i, /date/i]),
+    amount: find([/current\s*owed/i, /^current/i, /amount\s*due/i, /total\s*due/i, /^amount/i, /balance/i, /owed/i, /amount/i, /total/i]),
+    desc:   find([/notes/i, /description/i, /memo/i, /detail/i]),
+    gl:     find([/account/i, /\bg\.?l\.?\b/i]),
+  };
+}
+function parseRows(rows, h, skip, m){
+  const out = [];
+  let cur = "";
+  for (let i = h + skip; i < rows.length; i++){
+    const r = rows[i] || [];
+    const firstText = r.find(c => typeof c === "string" && c.trim());
+    if (firstText && /^(total\b|grand\s*total)/i.test(firstText.trim())) continue;
+    const nameC = m.vendor >= 0 ? r[m.vendor] : null;
+    if (typeof nameC === "string" && nameC.trim()) cur = nameC.trim();
+    const amt = m.amount >= 0 ? toNum(r[m.amount]) : null;
+    if (amt === null || amt === 0) continue;
+    out.push({
+      vendor: (typeof nameC === "string" && nameC.trim()) ? nameC.trim() : cur,
+      inv: String(m.inv >= 0 && r[m.inv] != null ? r[m.inv] : "").trim(),
+      date: m.date >= 0 ? fmtDate(r[m.date]) : "",
+      amount: amt,
+      desc: String(m.desc >= 0 && r[m.desc] != null ? r[m.desc] : "").trim(),
+      gl: String(m.gl >= 0 && r[m.gl] != null ? r[m.gl] : "").trim(),
+      status: null, note: "", page: null
+    });
+  }
+  return out.filter(x => x.vendor);
+}
+/*PARSE-END*/
+
+/* ---------- app state ---------- */
+const S = {
+  screen: "home",
+  M: null,          // current month record {id,building,period,rows,savedAt}
+  prior: [],        // earlier months, same building, sorted desc (most recent first)
+  sel: 0,
+  filter: "all",
+  pdf: null,        // pdfjs document
+  pdfPageNum: 1, pdfPages: 0, zoom: 1, fitScale: 1,
+  imp: { grid: null, hdr: -1, skip: 1, map: null, rows: [], pdfFile: null, xlsxName: "" },
+  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null,
+};
+
+function show(scr){
+  ["login","home","import","review"].forEach(s => $("scr-"+s).classList.toggle("hidden", s !== scr));
+  S.screen = scr;
+  $("btnExport").classList.toggle("hidden", scr !== "review");
+  $("btnPrev").classList.toggle("hidden", scr !== "review" || !S.prior.length || S.readonly);
+  $("btnShare").classList.toggle("hidden", scr !== "review" || S.readonly);
+  if (scr !== "review"){
+    $("hdrctx").textContent = ""; $("hdrprog").textContent = "";
+    document.body.classList.remove("pdfmax");
+    const bm = $("btnMax"); if (bm) bm.textContent = "⛶ Bigger";
+    if (S.pop && !S.pop.closed){ S.pop.close(); }
+    S.pop = null;
+    const pw = $("pdfwrap"); if (pw) pw.style.display = "";
+    const bp = $("btnPop"); if (bp) bp.textContent = "🗗 Second window";
+  }
+}
+
+/* ---------- auth ---------- */
+async function boot(){
+  if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
+  if (!sb){ show("login"); $("liErr").textContent = "Not connected — reload the page and enter your Supabase URL and key (see setup guide)."; return; }
+  const { data: { session } } = await sb.auth.getSession();
+  if (session){ loggedIn(session); } else { show("login"); }
+}
+function loggedIn(session){
+  $("useremail").textContent = session.user.email;
+  $("btnOut").classList.remove("hidden");
+  goHome();
+}
+async function doLogin(){
+  if (!sb) return;
+  $("liErr").textContent = "";
+  const { data, error } = await sb.auth.signInWithPassword({ email: $("liEmail").value.trim(), password: $("liPass").value });
+  if (error){ $("liErr").textContent = error.message; return; }
+  loggedIn(data.session);
+}
+async function doLogout(){
+  await saveNow();
+  await sb.auth.signOut();
+  location.reload();
+}
+
+/* ---------- share (read-only link) ---------- */
+async function shareMonth(){
+  await saveNow();
+  const id = S.M.id;
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(24)), b => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+  let pdfUrl = null;
+  const meta = await dbGet("kv", "pdfmeta|" + id);
+  if (meta && meta.v && meta.v.exists){
+    const { data } = await sb.storage.from("pdfs").createSignedUrl(id + ".pdf", 60 * 60 * 24 * 30);
+    if (data) pdfUrl = data.signedUrl;
+  }
+  await dbPut("kv", { k: "share|" + id, v: { monthId: id, token, pdfUrl, created: new Date().toISOString() } });
+  const link = location.origin + location.pathname + "#share=" + token;
+  try{ await navigator.clipboard.writeText(link); } catch(e){}
+  prompt("Read-only link copied to your clipboard — paste it into an email or text.\n\nAnyone with this link can VIEW this month only (statuses, notes, and the PDF) but can't change anything or see other months. Creating a new link replaces this one. The PDF part of the link works for 30 days.", link);
+}
+async function viewerBoot(token){
+  document.body.classList.add("readonly");
+  S.readonly = true;
+  if (!sb){ document.body.innerHTML = '<p style="padding:40px;text-align:center">This link is not set up correctly.</p>'; return; }
+  const { data, error } = await sb.rpc("shared_month", { tok: token });
+  if (error || !data){
+    $("scr-home").innerHTML = '<div class="card" style="max-width:420px;margin:70px auto;text-align:center">This share link is no longer valid. Ask the sender for a fresh one.</div>';
+    show("home"); return;
+  }
+  S.M = { id: "shared", building: data.building, period: data.period, rows: (data.data && data.data.rows) || [] };
+  S.M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
+  S.prior = [];
+  S.sel = 0; S.filter = "all";
+  S.sharedPdfUrl = data.pdf || null;
+  $("hdrctx").textContent = data.building + " — " + moLabel(data.period) + "  ·  shared view (read-only)";
+  show("review");
+  $("btnExport").classList.add("hidden");
+  renderTable(); renderRight();
+  if (S.sharedPdfUrl) loadSharedPdf(S.sharedPdfUrl);
+  else { $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); }
+}
+async function loadSharedPdf(url){
+  try{
+    await ensureWorker();
+    const buf = await fetch(url).then(r => { if (!r.ok) throw new Error("PDF link expired"); return r.arrayBuffer(); });
+    S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    S.pdfPages = S.pdf.numPages;
+    S.pdfPageNum = 1;
+    pdfFit();
+  } catch(err){
+    $("pdfcanvas").classList.add("hidden");
+    $("nopdf").textContent = "The PDF part of this link has expired — ask for a fresh link.";
+    $("nopdf").classList.remove("hidden");
+  }
+}
+
+/* ---------- home ---------- */
+async function allBuildings(){
+  const months = await dbAll("months");
+  const kv = await dbGet("kv", "buildings");
+  return [...new Set([...((kv && kv.v) || []), ...months.map(m => m.building)])].sort((a,b) => a.localeCompare(b));
+}
+async function addBuilding(){
+  const name = (prompt("Building name:") || "").trim();
+  if (!name) return;
+  const blds = await allBuildings();
+  if (blds.some(b => vkey(b) === vkey(name))) return toast("That building is already on the list.");
+  const kv = await dbGet("kv", "buildings");
+  await dbPut("kv", { k: "buildings", v: [...((kv && kv.v) || []), name] });
+  toast("Added " + name);
+  goHome();
+}
+async function exportBackup(){
+  await saveNow();
+  const months = await dbAll("months");
+  const kv = await dbAll("kv");
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify({ app: "payables-review", v: 1, exported: stamp, months, kv })], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "payables-review-backup-" + stamp + ".json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Backup downloaded (" + months.length + " packages). The invoice PDFs aren't inside it — re-attach them per package after importing.");
+}
+async function handleBackupFile(file){
+  try{
+    const data = JSON.parse(await file.text());
+    if (data.app !== "payables-review" || !Array.isArray(data.months)) throw new Error("that's not a Payables Review backup file");
+    let n = 0;
+    for (const m of data.months){ if (m && m.id){ await dbPut("months", m); n++; } }
+    for (const k of (data.kv || [])){ if (k && k.k){ await dbPut("kv", k); } }
+    toast("Imported " + n + " package" + (n === 1 ? "" : "s") + " with all statuses and notes. Open one and use “＋ Add the backup PDF” to re-attach its invoice images.");
+    goHome();
+  } catch(err){ toast("Couldn't import: " + err.message); }
+}
+async function goHome(){
+  if (S.readonly) return;
+  await saveNow();
+  S.M = null;
+  const months = await dbAll("months");
+  months.sort((a,b) => b.period.localeCompare(a.period));
+  const blds = await allBuildings();
+  const box = $("homelist");
+  if (!blds.length){
+    box.innerHTML = '<div class="card" style="text-align:center;color:var(--tx2);padding:40px">Nothing here yet. Click <b>+ Add building</b> to set up your buildings, then <b>+ New month</b> to add the first aging spreadsheet and backup PDF.</div>';
+  } else {
+    let html = "";
+    blds.forEach(b => {
+      html += '<h3 style="font-size:14px;margin:16px 0 8px">'+esc(b)+'</h3>';
+      const ms = months.filter(m => m.building === b);
+      if (!ms.length){ html += '<div class="small muted" style="margin-bottom:8px">No months yet — click “+ New month” when the first package arrives.</div>'; return; }
+      ms.forEach(mo => {
+        const done = mo.rows.filter(r => r.status).length, q = mo.rows.filter(r => r.status === "question").length, h = mo.rows.filter(r => r.status === "hold").length;
+        const tot = mo.rows.reduce((s,r) => s + r.amount, 0);
+        html += '<div class="monthcard" onclick="openMonth(\''+mo.id+'\')">'
+          + '<div><b>'+moLabel(mo.period)+'</b><div class="small muted">'+mo.rows.length+' invoices · $'+fmt(tot)
+          + (q ? ' · <span style="color:var(--red)">'+q+' question'+(q>1?'s':'')+'</span>' : '')
+          + (h ? ' · <span style="color:var(--orange)">'+h+' on hold</span>' : '') + '</div></div>'
+          + '<div style="display:flex;align-items:center;gap:12px"><span class="small muted">'+done+'/'+mo.rows.length+' reviewed</span>'
+          + '<span class="bar"><i style="width:'+(mo.rows.length?Math.round(done/mo.rows.length*100):0)+'%"></i></span>'
+          + '<button onclick="event.stopPropagation();delMonth(\''+mo.id+'\')" title="Delete this month">🗑</button></div></div>';
+      });
+    });
+    box.innerHTML = html;
+  }
+  show("home");
+}
+async function delMonth(id){
+  if (!confirm("Delete this month and its saved statuses/notes? The PDF copy stored in the app is removed too. (Your original files are untouched.)")) return;
+  await dbDel("months", id); await dbDel("pdfs", id);
+  goHome();
+}
+
+/* ---------- import ---------- */
+async function goImport(){
+  const blds = await allBuildings();
+  $("inBuilding").innerHTML = blds.map(b => '<option value="'+esc(b)+'">'+esc(b)+'</option>').join("")
+    + '<option value="__new__">+ Add a new building…</option>';
+  $("inBuildingNew").value = ""; $("inBuildingNew").classList.add("hidden");
+  if (!blds.length){ $("inBuilding").value = "__new__"; $("inBuildingNew").classList.remove("hidden"); }
+  const now = new Date();
+  $("inPeriod").value = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
+  $("fX").value = ""; $("fP").value = "";
+  $("dzX").classList.remove("has"); $("dzP").classList.remove("has");
+  $("dzX").querySelector("b").textContent = "Aging spreadsheet";
+  $("dzP").querySelector("b").textContent = "Invoice backup";
+  $("mapbox").classList.add("hidden"); $("gridbox").classList.add("hidden"); $("btnStart").disabled = true;
+  GR = [];
+  S.imp = { grid:null, hdr:-1, skip:1, map:null, rows:[], pdfFile:null, xlsxName:"", summaryPage:null };
+  show("import");
+}
+["dzX","dzP"].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener("dragover", e => { e.preventDefault(); });
+  el.addEventListener("drop", e => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f) (id === "dzX" ? handleXlsx : handlePdf)(f);
+  });
+});
+function getBuilding(){
+  const v = $("inBuilding").value;
+  return v === "__new__" ? $("inBuildingNew").value.trim() : v;
+}
+function bldChanged(){
+  $("inBuildingNew").classList.toggle("hidden", $("inBuilding").value !== "__new__");
+  if ($("inBuilding").value === "__new__") $("inBuildingNew").focus();
+  importValidate();
+}
+function importValidate(){
+  $("btnStart").disabled = !(S.imp.rows.length && getBuilding() && $("inPeriod").value);
+}
+$("fX").addEventListener("change", e => e.target.files[0] && handleXlsx(e.target.files[0]));
+$("fP").addEventListener("change", e => e.target.files[0] && handlePdf(e.target.files[0]));
+$("fBak").addEventListener("change", e => { if (e.target.files[0]) handleBackupFile(e.target.files[0]); e.target.value = ""; });
+$("fLatePdf").addEventListener("change", async e => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (!f || !S.M || S.readonly) return;
+  try{
+    const buf = await f.arrayBuffer();
+    const prev = await dbGet("pdfs", S.M.id).catch(() => null);
+    await dbPut("pdfs", { id: S.M.id, blob: new Blob([buf], { type: "application/pdf" }), name: f.name, ocr: (prev && prev.ocr) || null });
+    toast("Backup PDF attached.");
+    S.ocrAuto[S.M.id] = 0;
+    loadPdf(S.M.id);
+  } catch(err){ toast("Couldn't attach the PDF: " + err.message); }
+});
+
+async function handleXlsx(file){
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    const hdr = detectHeader(grid);
+    if (hdr < 0){ toast("Couldn't find a header row in that spreadsheet."); return; }
+    const { labels, skip } = colLabels(grid, hdr);
+    S.imp.grid = grid; S.imp.hdr = hdr; S.imp.skip = skip; S.imp.labels = labels; S.imp.xlsxName = file.name;
+    const per = detectPeriod(grid, file.name);
+    if (per){ $("inPeriod").value = per.length === 7 ? per + "-01" : per; toast("Date detected from the report: " + moLabel(per)); }
+    const auto = autoMap(labels);
+    let map = auto;
+    const saved = await dbGet("kv", "map|" + vkey(getBuilding()));
+    if (saved && saved.v){
+      const sv = saved.v.map || saved.v;
+      const savedLabels = saved.v.labels || null;
+      const cand = {};
+      for (const k in auto){
+        let idx = (sv[k] != null) ? sv[k] : -1;
+        if (savedLabels && idx >= 0){
+          const j = labels.indexOf(savedLabels[idx]);
+          idx = j;
+        } else if (idx >= labels.length) idx = -1;
+        cand[k] = idx >= 0 ? idx : auto[k];
+      }
+      const nCand = parseRows(grid, hdr, skip, cand).length;
+      const nAuto = parseRows(grid, hdr, skip, auto).length;
+      if (nCand > 0 && nCand >= nAuto) map = cand;
+    }
+    S.imp.map = map;
+    $("gridbox").classList.add("hidden"); GR = []; S.imp.summaryPage = null;
+    $("dzX").classList.add("has");
+    $("dzX").querySelector("b").textContent = file.name;
+    renderMapping();
+  } catch(err){ toast("Couldn't read that file: " + err.message); }
+}
+function handlePdf(file){
+  S.imp.pdfFile = file;
+  $("dzP").classList.add("has");
+  $("dzP").querySelector("b").textContent = file.name;
+}
+const MAPFIELDS = [["vendor","Vendor name"],["inv","Invoice #"],["date","Invoice date"],["amount","Amount owed"],["desc","Description / notes"],["gl","Account / GL (optional)"]];
+function renderMapping(){
+  const { labels, map, grid, hdr, skip } = S.imp;
+  const opts = i => '<option value="-1">— none —</option>' + labels.map((l, j) => {
+    let sample = "";
+    for (let k = hdr + skip; k < Math.min(grid.length, hdr + skip + 25); k++){
+      const v = (grid[k]||[])[j];
+      if (v != null && String(v).trim()){ sample = v instanceof Date ? fmtDate(v) : String(v); break; }
+    }
+    return '<option value="'+j+'"'+(map[i]===j?" selected":"")+'>'+esc(l || "(column "+(j+1)+")")+(sample?"  ·  e.g. "+esc(String(sample).slice(0,24)):"")+'</option>';
+  }).join("");
+  $("maprows").innerHTML = MAPFIELDS.map(([k,lab]) =>
+    '<div class="maprow"><label class="small">'+lab+'</label><select data-k="'+k+'" onchange="mapChanged(this)">'+opts(k)+'</select></div>').join("");
+  refreshPreview();
+}
+function mapChanged(sel){ S.imp.map[sel.dataset.k] = +sel.value; refreshPreview(); }
+function refreshPreview(){
+  const { grid, hdr, skip, map } = S.imp;
+  const rows = parseRows(grid, hdr, skip, map);
+  S.imp.rows = rows;
+  const tot = rows.reduce((s,r) => s + r.amount, 0);
+  $("pvcount").textContent = rows.length + " invoices, total $" + fmt(tot);
+  $("pvtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th></tr>'
+    + rows.slice(0, 12).map(r => '<tr><td>'+esc(r.vendor)+'</td><td>'+esc(r.inv)+'</td><td>'+esc(r.date)+'</td><td style="text-align:right">$'+fmt(r.amount)+'</td><td class="desc-cell">'+esc(r.desc)+'</td></tr>').join("")
+    + (rows.length > 12 ? '<tr><td colspan="5" class="muted">… and '+(rows.length-12)+' more</td></tr>' : '') + '</table>';
+  $("mapbox").classList.remove("hidden");
+  importValidate();
+}
+$("inPeriod").addEventListener("input", importValidate);
+
+async function startReview(){
+  const building = getBuilding();
+  if (!building) return toast("Give the new building a name first.");
+  const period = $("inPeriod").value;
+  const id = vkey(building) + "|" + period;
+  const existing = await dbGet("months", id);
+  if (existing && !confirm(moLabel(period) + " for " + building + " already exists. Replace it? Your saved statuses on it will be lost.")) return;
+  const M = { id, building, period, rows: S.imp.rows, xlsxName: S.imp.xlsxName, summaryPage: (S.imp.summaryPage == null ? null : S.imp.summaryPage), savedAt: Date.now() };
+  await dbPut("months", M);
+  if (S.imp.map) await dbPut("kv", { k: "map|" + vkey(building), v: { map: S.imp.map, labels: S.imp.labels || null } });
+  const blds = await allBuildings();
+  if (!blds.some(b => vkey(b) === vkey(building))){
+    const kv = await dbGet("kv", "buildings");
+    await dbPut("kv", { k: "buildings", v: [...((kv && kv.v) || []), building] });
+  }
+  if (S.imp.pdfFile){
+    const buf = await S.imp.pdfFile.arrayBuffer();
+    await dbPut("pdfs", { id, blob: new Blob([buf], { type: "application/pdf" }), name: S.imp.pdfFile.name, ocr: null });
+  } else {
+    await dbDel("pdfs", id);
+  }
+  openMonth(id);
+}
+
+/* ---------- PDF-only import (summary list is a page inside the PDF) ---------- */
+let GR = [];
+/*OCRTABLE-START*/
+function detectPeriodText(t){
+  const months = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+  const pad = n => String(+n).padStart(2, "0");
+  let m = t.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s*(\d{4})/i);
+  if (m) return m[3] + "-" + pad(months[m[1].toLowerCase()]) + "-" + pad(m[2]);
+  m = t.match(/([01]?\d)[\/\-.](\d{1,2})[\/\-.](20\d{2})/);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return m[3] + "-" + pad(m[1]) + "-" + pad(m[2]);
+  return null;
+}
+function cleanTok(t){
+  const s = (t || "").replace(/^[\[\]{}()|~_—=«»‘’“”·:;,]+|[\[\]{}()|~_—=«»‘’“”·:;,]+$/g, "").trim();
+  if (!s) return null;
+  if (/^[eE]{1,4}$/.test(s) || /^[iIl|!]{1,2}$/.test(s) || /^[~—_=\-.]+$/.test(s) || /^r{1,3}$/i.test(s)) return null;
+  return s;
+}
+function wordsFromData(data){
+  const out = [];
+  const push = w => {
+    if (!w || !w.text || !w.bbox) return;
+    const conf = (w.confidence == null ? 100 : w.confidence);
+    const isMoney = /[\d,]+\.\d{2}/.test(w.text);
+    const t = isMoney ? w.text.trim().replace(/^[^$\d]+|[^\d]+$/g, "") : cleanTok(w.text);
+    if (t && (conf >= 40 || isMoney)) out.push({ t, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+  };
+  if (data.words && data.words.length) data.words.forEach(push);
+  else (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(push))));
+  return out;
+}
+function ocrTableRows(words, W){
+  const MONEY = /^\$?[\d,]{1,12}\.\d{2}$/;
+  const money = words.filter(w => MONEY.test(w.t));
+  if (!money.length) return [];
+  const yc = w => (w.y0 + w.y1) / 2;
+  const bands = [];
+  [...money].sort((a,b) => yc(a) - yc(b)).forEach(m => {
+    const h = m.y1 - m.y0;
+    const b = bands.find(b => Math.abs(b.yc - yc(m)) < h * 1.2);
+    if (b) b.items.push(m); else bands.push({ yc: yc(m), items: [m] });
+  });
+  bands.sort((a,b) => a.yc - b.yc);
+  const med = a => { const s = [...a].sort((x,y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const lineH = med(money.map(m => m.y1 - m.y0)) || 18;
+  const bandWords = (i, b) => {
+    const top = i > 0 ? (bands[i-1].yc + b.yc) / 2 : b.yc - 3.5 * lineH;
+    const bot = i < bands.length - 1 ? (b.yc + bands[i+1].yc) / 2 : b.yc + 3.5 * lineH;
+    const minx = Math.min(...b.items.map(m => m.x0));
+    return words.filter(w => !b.items.includes(w) && yc(w) > top && yc(w) < bot && w.x1 < minx && w.t !== "$" && w.t !== "|" && !/^(amount|hst|gst|total|cheque)$/i.test(w.t));
+  };
+  const toLines = tw => {
+    const sorted = [...tw].sort((a,b) => yc(a) - yc(b));
+    const lines = [];
+    sorted.forEach(w => {
+      const L = lines[lines.length - 1];
+      if (L && Math.abs(yc(w) - L.y) < lineH * 0.7){ L.ws.push(w); L.y = (L.y + yc(w)) / 2; }
+      else lines.push({ y: yc(w), ws: [w] });
+    });
+    return lines.map(l => l.ws.sort((a,b) => a.x0 - b.x0));
+  };
+  const all = bands.map((b, i) => ({ b, tw: bandWords(i, b) }));
+  const descxs = [];
+  all.forEach(({ tw }) => toLines(tw).forEach(ws => {
+    for (let j = 1; j < ws.length; j++){ if (ws[j].x0 - ws[j-1].x1 > W * 0.04){ descxs.push(ws[j].x0); break; } }
+  }));
+  const descX = med(descxs) || W * 0.25;
+  const out = [];
+  all.forEach(({ b, tw }) => {
+    const vend = [], desc = [];
+    toLines(tw).forEach(ws => ws.forEach(w => { (w.x0 < descX - W * 0.02 ? vend : desc).push(w.t); }));
+    const v = vend.join(" ").trim(), ds = desc.join(" ").trim();
+    if ((v + ds).replace(/\W/g, "").length < 3 || /^\W*total\W*$/i.test(v + ds)) return;
+    const ms = [...b.items].sort((a, b2) => a.x0 - b2.x0).map(m => toNum(m.t.replace(/^\$/, ""))).filter(x => x !== null);
+    if (!ms.length) return;
+    const total = ms[ms.length - 1];
+    const base = ms.length >= 2 ? ms[0] : null;
+    const hst = ms.length >= 3 ? ms[1] : null;
+    const im = ds.match(/invoice\s*[#3:]*\s*([A-Za-z0-9][\w\/-]{2,})/i);
+    out.push({ vendor: v || ds.split(/\s+/).slice(0, 3).join(" "), inv: im ? im[1] : "", date: "", amount: total, base, hst, desc: ds, gl: "", status: null, note: "", page: null });
+  });
+  return out.filter(r => {
+    const others = out.filter(o => o !== r);
+    if (others.length < 3) return true;
+    const oa = others.reduce((s, o) => s + o.amount, 0);
+    const ob = others.reduce((s, o) => s + (o.base == null ? o.amount : o.base), 0);
+    return Math.abs(r.amount - oa) > 0.02 && Math.abs(r.amount - ob) > 0.02;
+  });
+}
+/*OCRTABLE-END*/
+async function pdfOnlyStart(){
+  if (!S.imp.pdfFile){ toast("Add the PDF in the right-hand box first — the summary page has to be inside it."); return; }
+  const pg = Math.max(1, parseInt(prompt("Which page of the PDF is the summary list?", "1"), 10) || 1);
+  toast("Reading page " + pg + "… takes about 15 seconds");
+  try{
+    await ensureWorker();
+    const buf = await S.imp.pdfFile.arrayBuffer();
+    const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+    if (pg > doc.numPages){ toast("That PDF only has " + doc.numPages + " pages."); return; }
+    const page = await doc.getPage(pg);
+    const vp = page.getViewport({ scale: 3 });
+    const c = document.createElement("canvas");
+    c.width = vp.width; c.height = vp.height;
+    await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+    if (!window.Tesseract){
+      await new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js"; s.onload = res; s.onerror = () => rej(new Error("couldn't load the text reader")); document.head.appendChild(s); });
+    }
+    const worker = await Tesseract.createWorker("eng");
+    await worker.setParameters({ tessedit_pageseg_mode: "11", user_defined_dpi: "300" });
+    const { data } = await worker.recognize(c, {}, { blocks: true, text: true });
+    await worker.terminate();
+    const per = detectPeriodText(data.text || "");
+    if (per) $("inPeriod").value = per.length === 7 ? per + "-01" : per;
+    GR = ocrTableRows(wordsFromData(data), c.width);
+    S.imp.summaryPage = pg - 1;
+    S.imp.map = null; S.imp.xlsxName = "(read from PDF page " + pg + ")";
+    $("mapbox").classList.add("hidden");
+    $("gridpg").textContent = pg;
+    renderGrid();
+    toast(GR.length ? "Found " + GR.length + " lines — check each one against the page." : "Couldn't find amounts on that page — add the lines by hand with + Add line.");
+  } catch(err){ toast("Couldn't read that page: " + err.message); }
+}
+function renderGrid(){
+  $("gridbox").classList.remove("hidden");
+  const num = v => v == null ? "" : v;
+  $("gridtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th>Amount</th><th>HST/tax</th><th>Total</th><th>Description</th><th></th></tr>'
+    + GR.map((r, i) =>
+      '<tr><td><input style="width:145px" value="' + esc(r.vendor) + '" oninput="GR[' + i + '].vendor=this.value;gridTotal()"></td>'
+      + '<td><input style="width:100px" value="' + esc(r.inv) + '" oninput="GR[' + i + '].inv=this.value"></td>'
+      + '<td><input style="width:70px" value="' + esc(r.date) + '" oninput="GR[' + i + '].date=this.value"></td>'
+      + '<td><input style="width:80px" value="' + esc(num(r.base)) + '" oninput="gridMoney(' + i + ',\'base\',this.value)"></td>'
+      + '<td><input style="width:70px" value="' + esc(num(r.hst)) + '" oninput="gridMoney(' + i + ',\'hst\',this.value)"></td>'
+      + '<td><input style="width:85px;font-weight:600" value="' + esc(num(r.amount)) + '" oninput="GR[' + i + '].amount=this.value;gridTotal()" id="grTot' + i + '"></td>'
+      + '<td><input style="width:200px" value="' + esc(r.desc) + '" oninput="GR[' + i + '].desc=this.value"></td>'
+      + '<td><button onclick="GR.splice(' + i + ',1);renderGrid()" title="Delete line">✕</button></td></tr>').join("")
+    + '</table>';
+  gridTotal();
+}
+function gridMoney(i, k, v){
+  GR[i][k] = toNum(v);
+  const b = GR[i].base;
+  if (b != null){
+    GR[i].amount = Math.round((b + (GR[i].hst || 0)) * 100) / 100;
+    const el = $("grTot" + i);
+    if (el) el.value = GR[i].amount;
+  }
+  gridTotal();
+}
+function gridAddRow(){
+  GR.push({ vendor: "", inv: "", date: "", amount: "", base: null, hst: null, desc: "", gl: "", status: null, note: "", page: null });
+  renderGrid();
+}
+function gridTotal(){
+  S.imp.rows = GR.map(r => ({ ...r, amount: toNum(String(r.amount)) })).filter(r => r.vendor && r.amount);
+  $("gridtotal").textContent = "$" + fmt(S.imp.rows.reduce((s, r) => s + r.amount, 0));
+  importValidate();
+}
+
+/* ---------- review ---------- */
+async function openMonth(id){
+  const M = await dbGet("months", id);
+  if (!M) return toast("Month not found");
+  S.M = M; S.sel = 0; S.filter = "all";
+  M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
+  const all = await dbAll("months");
+  S.prior = all.filter(m => m.building === M.building && m.period < M.period).sort((a,b) => b.period.localeCompare(a.period));
+  $("hdrctx").textContent = M.building + " — " + moLabel(M.period);
+  show("review");
+  renderTable();
+  renderRight();
+  loadPdf(id);
+}
+function visibleIdx(){
+  return S.M.rows.map((r,i) => i).filter(i => {
+    const r = S.M.rows[i];
+    if (S.filter === "open") return !r.status;
+    if (S.filter === "flag") return r.status === "question" || r.status === "hold";
+    return true;
+  });
+}
+function setFilter(f){
+  S.filter = f;
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === f));
+  const vis = visibleIdx();
+  if (vis.length && !vis.includes(S.sel)) S.sel = vis[0];
+  renderTable(); renderRight();
+}
+function vendorTotals(rows){
+  const t = {};
+  rows.forEach(r => { const k = vkey(r.vendor); t[k] = (t[k] || 0) + r.amount; });
+  return t;
+}
+function rowDelta(row){
+  if (!S.prior.length) return null;
+  const k = vkey(row.vendor);
+  const nowT = vendorTotals(S.M.rows)[k];
+  for (const mo of S.prior){
+    const pt = vendorTotals(mo.rows)[k];
+    if (pt !== undefined) return { prev: pt, period: mo.period, pct: pt ? Math.round((nowT - pt) / Math.abs(pt) * 100) : null };
+  }
+  return { prev: null };
+}
+function renderTable(){
+  const body = $("revbody");
+  const vis = visibleIdx();
+  body.innerHTML = vis.map(i => {
+    const r = S.M.rows[i];
+    const d = rowDelta(r);
+    let tag = "";
+    if (d && d.prev === null) tag = ' <span class="tag-new">new</span>';
+    else if (d && d.pct !== null && d.pct !== 0) tag = ' <span class="'+(d.pct > 0 ? "delta-up" : "delta-dn")+'">'+(d.pct > 0 ? "+" : "")+d.pct+'%</span>';
+    const dupe = dupeMsgs(r, i);
+    const noteCls = r.status === "question" ? "note-q" : "note-h";
+    return '<tr class="'+(r.status ? "st-"+r.status : "")+(i === S.sel ? " sel" : "")+'" onclick="selectRow('+i+')">'
+      + '<td>'+esc(r.vendor)+(dupe.length ? ' <span title="'+esc(dupe[0])+'" style="color:var(--red)">⧉</span>' : "")+((r.pages && r.pages.length > 1) ? ' <span title="This line has '+r.pages.length+' backup pages" style="font-size:10.5px;color:var(--tx2);background:#efede6;border-radius:8px;padding:0 6px;white-space:nowrap">📎'+r.pages.length+'</span>' : '')+'</td>'
+      + '<td class="rowmeta">'+esc(r.inv)+'</td><td class="rowmeta">'+esc(r.date)+'</td>'
+      + '<td style="text-align:right;font-weight:500;white-space:nowrap">$'+fmt(r.amount)+tag+'</td>'
+      + '<td class="desc-cell rowmeta" title="'+esc(r.desc)+'">'+esc(r.desc)+'</td>'
+      + '<td class="'+noteCls+'" style="font-size:12px">'+esc(r.note)+'</td></tr>';
+  }).join("");
+  const done = S.M.rows.filter(r => r.status).length;
+  $("hdrprog").textContent = done + " of " + S.M.rows.length + " reviewed";
+}
+function dupeMsgs(row, idx){
+  const msgs = [];
+  const iv = normInv(row.inv), k = vkey(row.vendor);
+  if (iv){
+    S.M.rows.forEach((r, j) => { if (j !== idx && normInv(r.inv) === iv && vkey(r.vendor) === k) msgs.push("Invoice #" + row.inv + " appears twice on this month's aging."); });
+    for (const mo of S.prior){
+      const hit = mo.rows.find(r => normInv(r.inv) === iv && vkey(r.vendor) === k);
+      if (hit){
+        let m = "Also on the " + moLabel(mo.period) + " aging ($" + fmt(hit.amount) + ")";
+        if (hit.status) m += " — you marked it \"" + hit.status + "\"" + (hit.note ? ": “" + hit.note + "”" : "");
+        msgs.push(m);
+        break;
+      }
+    }
+  } else {
+    for (const mo of S.prior){
+      const hit = mo.rows.find(r => vkey(r.vendor) === k && r.amount === row.amount && r.date === row.date);
+      if (hit){ msgs.push("Same vendor, amount and date as a line on the " + moLabel(mo.period) + " aging."); break; }
+    }
+  }
+  return [...new Set(msgs)];
+}
+function selectRow(i){
+  S.sel = i;
+  renderTable(); renderRight();
+  const r = S.M.rows[i];
+  if (S.pdf){
+    let pg = (r.pages && r.pages.length) ? r.pages[0] : null;
+    if (pg == null){ for (let j = i - 1; j >= 0; j--){ const pj = S.M.rows[j].pages; if (pj && pj.length){ pg = pj[pj.length - 1]; break; } } }
+    if (pg != null && pg + 1 !== S.pdfPageNum){ S.pdfPageNum = pg + 1; renderPdf(); }
+  }
+  const tr = document.querySelector("#revbody tr.sel");
+  if (tr) tr.scrollIntoView({ block: "nearest" });
+}
+function renderRight(){
+  const r = S.M.rows[S.sel];
+  if (!r){ $("selhead").innerHTML = '<span class="muted">No rows</span>'; return; }
+  $("selhead").innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+    + '<div><b>'+esc(r.vendor)+'</b><div class="rowmeta">'+esc([r.inv && ("#" + r.inv), r.date, r.gl].filter(Boolean).join(" · "))+'</div></div>'
+    + '<div style="text-align:right"><div style="font-size:20px;font-weight:600;white-space:nowrap">$'+fmt(r.amount)+'</div>'
+    + (r.base != null ? '<div class="rowmeta" style="white-space:nowrap">$'+fmt(r.base)+(r.hst != null ? ' + $'+fmt(r.hst)+' tax' : '')+'</div>' : '') + '</div></div>'
+    + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "");
+  const k = vkey(r.vendor);
+  const cells = [];
+  [...S.prior].reverse().slice(-3).forEach(mo => {
+    const t = vendorTotals(mo.rows)[k];
+    if (t !== undefined) cells.push('<div class="histcell"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(t)+'</div></div>');
+  });
+  const nowT = vendorTotals(S.M.rows)[k];
+  cells.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(nowT)+'</b></div></div>');
+  $("hist").innerHTML = (S.prior.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — total by month</div>' : "")
+    + '<div class="histstrip">'+cells.join("")+'</div>'
+    + priorInvoicesHtml(k);
+  const dupe = dupeMsgs(r, S.sel);
+  $("dupebox").innerHTML = dupe.map(m => {
+    const info = /you marked|Also on/i.test(m) && !/twice/i.test(m);
+    return '<div class="'+(info ? "info" : "warn")+'">'+(info ? "ℹ️ " : "⚠️ ")+esc(m)+'</div>';
+  }).join("");
+  $("bApp").classList.toggle("on", r.status === "approved");
+  $("bQ").classList.toggle("on", r.status === "question");
+  $("bHold").classList.toggle("on", r.status === "hold");
+  if (document.activeElement !== $("noteinp")) $("noteinp").value = r.note || "";
+  renderPgLinks();
+}
+function renderPgLinks(){
+  updatePop();
+  const pl = $("pglinks");
+  if (!pl) return;
+  const r = S.M && S.M.rows[S.sel];
+  if (!r || !S.pdf){ pl.innerHTML = ""; return; }
+  const ps = r.pages || [];
+  if (!ps.length){
+    pl.innerHTML = S.ocrRunning
+      ? '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line will jump to its invoice automatically — no need to link anything yet.</span>'
+      : (S.readonly ? "" : '📎 No pages linked to this line yet — flip to its backup with ◀ ▶ and click "Link page to row" (repeat if a line has several backups).');
+    return;
+  }
+  const cur = S.pdfPageNum - 1;
+  const pos = ps.indexOf(cur);
+  pl.innerHTML = '📎 <b style="color:var(--tx)">' + ps.length + ' backup' + (ps.length > 1 ? "s" : "") + '</b> for this line'
+    + (ps.length > 1 ? (pos >= 0 ? ' — viewing ' + (pos + 1) + ' of ' + ps.length : ' — click to view each') : '')
+    + ': ' + ps.map((p, j) => '<button style="padding:1px 9px;font-size:12px;margin-right:4px;' + (p === cur ? 'border-color:var(--blue);color:var(--blue);font-weight:600;background:var(--blue-bg);' : '') + '" onclick="gotoPage(' + p + ')" title="Go to PDF page ' + (p + 1) + '">' + (j + 1) + '</button>').join("");
+}
+function priorInvoicesHtml(k){
+  const items = [];
+  S.prior.forEach(mo => mo.rows.forEach(r => { if (vkey(r.vendor) === k) items.push({ p: mo.period, ...r }); }));
+  if (!items.length) return "";
+  const rows = items.slice(0, 6).map(it =>
+    '<tr><td class="rowmeta">'+moLabel(it.p)+'</td><td class="rowmeta">'+esc(it.inv)+'</td><td style="text-align:right">$'+fmt(it.amount)+'</td><td class="rowmeta desc-cell" style="max-width:150px" title="'+esc(it.desc)+'">'+esc(it.desc)+'</td></tr>').join("");
+  return '<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Past invoices from this vendor ('+items.length+')</summary>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px">'+rows+'</table></details>';
+}
+
+function act(status){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  if (r.status === status){ r.status = null; renderTable(); renderRight(); saveSoon(); return; }
+  r.status = status;
+  if (status === "approved"){
+    renderTable(); renderRight(); saveSoon();
+    const vis = visibleIdx();
+    const pos = vis.indexOf(S.sel);
+    if (pos >= 0 && pos < vis.length - 1) selectRow(vis[pos + 1]);
+  } else {
+    renderTable(); renderRight(); saveSoon();
+    $("noteinp").focus();
+  }
+}
+function noteChanged(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.note = $("noteinp").value;
+  if (r.note && !r.status) r.status = "question";
+  renderTable();
+  $("bApp").classList.toggle("on", r.status === "approved");
+  $("bQ").classList.toggle("on", r.status === "question");
+  $("bHold").classList.toggle("on", r.status === "hold");
+  saveSoon();
+}
+function applyPrevDecisions(){
+  let n = 0;
+  S.M.rows.forEach(row => {
+    if (row.status) return;
+    const iv = normInv(row.inv), k = vkey(row.vendor);
+    if (!iv) return;
+    for (const mo of S.prior){
+      const hit = mo.rows.find(r => normInv(r.inv) === iv && vkey(r.vendor) === k && r.amount === row.amount && r.status);
+      if (hit){ row.status = hit.status; row.note = hit.note; n++; break; }
+    }
+  });
+  renderTable(); renderRight(); saveSoon();
+  toast(n ? "Copied your earlier decisions onto " + n + " carried-over invoice" + (n > 1 ? "s" : "") : "No carried-over invoices with earlier decisions found.");
+}
+function saveSoon(){
+  if (S.readonly) return;
+  clearTimeout(S.saveTimer);
+  S.saveTimer = setTimeout(saveNow, 400);
+}
+async function saveNow(){
+  if (S.readonly) return;
+  clearTimeout(S.saveTimer);
+  if (S.M && S.screen === "review"){
+    S.M.savedAt = Date.now();
+    try{ await dbPut("months", S.M); }
+    catch(e){ toast("Couldn't save — check your internet connection. Your last change may not be stored."); }
+  }
+}
+
+/* ---------- PDF viewer ---------- */
+async function ensureWorker(){
+  if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc){
+    try{
+      const wjs = await fetch("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js").then(r => r.text());
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([wjs], { type: "text/javascript" }));
+    } catch(e){
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  }
+}
+async function loadPdf(id){
+  S.pdf = null; S.pdfPageNum = 1; S.pdfPages = 0;
+  $("pglabel").textContent = "– / –";
+  $("nopdf").classList.add("hidden");
+  const rec = await dbGet("pdfs", id);
+  if (!rec){ $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); $("btnOcr").disabled = true; return; }
+  $("btnOcr").disabled = false;
+  $("pdfcanvas").classList.remove("hidden");
+  try{
+    await ensureWorker();
+    const buf = await rec.blob.arrayBuffer();
+    S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    S.pdfPages = S.pdf.numPages;
+    const first = S.M.rows[S.sel];
+    if (first && first.pages && first.pages.length) S.pdfPageNum = first.pages[0] + 1;
+    pdfFit();
+    if (!rec.ocr && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
+      S.ocrAuto[id] = 1;
+      toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
+      runOcr();
+    } else if (rec.ocr && S.M.rows.some(r => !r.pages || !r.pages.length)){
+      autoMatch(S.M.rows, rec.ocr, S.M.summaryPage); saveSoon();
+    }
+  } catch(err){
+    toast("Couldn't open the PDF: " + err.message);
+  }
+}
+async function renderPdf(){
+  if (!S.pdf) return;
+  const page = await S.pdf.getPage(S.pdfPageNum);
+  const usePop = S.pop && !S.pop.closed;
+  const wrap = usePop ? S.pop.document.getElementById("pwrap") : $("pdfwrap");
+  const c = usePop ? S.pop.document.getElementById("pcanvas") : $("pdfcanvas");
+  if (!wrap || !c) return;
+  const dpr = (usePop ? S.pop.devicePixelRatio : window.devicePixelRatio) || 1;
+  const base = page.getViewport({ scale: 1 });
+  S.fitScale = (wrap.clientWidth - 24) / base.width;
+  const scale = S.fitScale * S.zoom * dpr;
+  const vp = page.getViewport({ scale });
+  c.width = vp.width; c.height = vp.height;
+  c.style.width = (vp.width / dpr) + "px";
+  c.style.height = (vp.height / dpr) + "px";
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  const r = S.M && S.M.rows[S.sel];
+  const linked = r && r.pages && r.pages.includes(S.pdfPageNum - 1);
+  $("pglabel").innerHTML = S.pdfPageNum + " / " + S.pdfPages + (linked ? ' <span style="color:var(--green)">📎</span>' : "");
+  renderPgLinks();
+}
+function popOut(){
+  if (S.pop && !S.pop.closed){
+    S.pop.close(); S.pop = null;
+    $("pdfwrap").style.display = "";
+    $("btnPop").textContent = "🗗 Second window";
+    renderPdf();
+    return;
+  }
+  const w = window.open("", "apreview_pdf", "width=950,height=1050");
+  if (!w){ toast("Your browser blocked the pop-up — allow pop-ups for this site and try again."); return; }
+  const d = w.document;
+  d.open();
+  d.write('<!DOCTYPE html><html><head><title>Invoice backup</title></head>'
+    + '<body style="margin:0;background:#6f6d67;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">'
+    + '<div style="position:sticky;top:0;z-index:2;background:#1a1a18;color:#fff;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    + '<span id="pinfo" style="font-weight:600"></span>'
+    + '<span style="flex:1"></span>'
+    + '<button id="pprev">◀</button><span id="ppg" style="min-width:60px;text-align:center"></span><button id="pnext">▶</button>'
+    + '<button id="pzo">−</button><button id="pzi">+</button><button id="pfit">Fit</button><button id="plink">📎 Link</button>'
+    + '<span style="font-size:11px;opacity:.75">↑↓ lines · ←→ pages · A/Q/H mark</span>'
+    + '</div>'
+    + '<div id="pwrap" style="overflow:auto;height:calc(100vh - 40px);text-align:center"><canvas id="pcanvas" style="margin:10px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.4)"></canvas></div>'
+    + '</body></html>');
+  d.close();
+  d.querySelectorAll("button").forEach(b => { b.style.cssText += ";font:inherit;padding:3px 10px;border-radius:5px;border:1px solid #555;background:#2e2e2b;color:#fff;cursor:pointer"; });
+  d.getElementById("pprev").onclick = () => pdfPage(-1);
+  d.getElementById("pnext").onclick = () => pdfPage(1);
+  d.getElementById("pzo").onclick = () => pdfZoom(-1);
+  d.getElementById("pzi").onclick = () => pdfZoom(1);
+  d.getElementById("pfit").onclick = () => pdfFit();
+  d.getElementById("plink").onclick = () => linkPage();
+  d.addEventListener("keydown", reviewKeydown);
+  w.addEventListener("beforeunload", () => {
+    S.pop = null;
+    const pw = $("pdfwrap"); if (pw) pw.style.display = "";
+    const bp = $("btnPop"); if (bp) bp.textContent = "🗗 Second window";
+    setTimeout(() => { if (S.screen === "review") renderPdf(); }, 100);
+  });
+  S.pop = w;
+  $("pdfwrap").style.display = "none";
+  $("btnPop").textContent = "🗕 Bring viewer back";
+  renderPdf();
+  toast("Drag the new window to your other screen — it follows along as you click lines here.");
+}
+function updatePop(){
+  if (!S.pop || S.pop.closed) return;
+  const d = S.pop.document;
+  const r = S.M && S.M.rows[S.sel];
+  const stLab = { approved: "✓ approved", question: "? question", hold: "⏸ on hold" };
+  const info = d.getElementById("pinfo");
+  if (info) info.textContent = r ? (r.vendor + " — $" + fmt(r.amount) + (r.status ? " · " + stLab[r.status] : "")) : "";
+  const pg = d.getElementById("ppg");
+  if (pg) pg.textContent = S.pdfPageNum + " / " + S.pdfPages + ((r && r.pages && r.pages.includes(S.pdfPageNum - 1)) ? " 📎" : "");
+}
+function togglePdfMax(){
+  document.body.classList.toggle("pdfmax");
+  const on = document.body.classList.contains("pdfmax");
+  $("btnMax").textContent = on ? "⤢ Back to table" : "⛶ Bigger";
+  renderPdf();
+}
+function pdfPage(d){ if (!S.pdf) return; S.pdfPageNum = Math.min(Math.max(1, S.pdfPageNum + d), S.pdfPages); renderPdf(); }
+function pdfZoom(d){ S.zoom = Math.min(Math.max(0.5, S.zoom + d * 0.25), 4); renderPdf(); }
+function pdfFit(){ S.zoom = 1; renderPdf(); }
+function linkPage(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r || !S.pdf) return;
+  if (!r.pages) r.pages = [];
+  const p = S.pdfPageNum - 1;
+  const ix = r.pages.indexOf(p);
+  if (ix >= 0){ r.pages.splice(ix, 1); toast("Page " + S.pdfPageNum + " unlinked from " + r.vendor); }
+  else { r.pages.push(p); r.pages.sort((a, b) => a - b); toast("Page " + S.pdfPageNum + " linked to " + r.vendor + (r.pages.length > 1 ? " (" + r.pages.length + " pages)" : "")); }
+  r.page = r.pages.length ? r.pages[0] : null;
+  saveSoon(); renderPdf(); renderRight();
+}
+function gotoPage(p){
+  if (!S.pdf) return;
+  S.pdfPageNum = p + 1;
+  renderPdf();
+}
+
+/* ---------- OCR auto-match ---------- */
+async function runOcr(){
+  if (!S.pdf || S.ocrRunning) return;
+  S.ocrRunning = true;
+  const rec = await dbGet("pdfs", S.M.id);
+  let texts = rec && rec.ocr;
+  if (!texts){
+    $("btnOcr").disabled = true;
+    try{
+      if (!window.Tesseract){
+        $("ocrbar").textContent = "Loading the text-reading engine…";
+        await new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+          s.onload = res; s.onerror = () => rej(new Error("couldn't load Tesseract"));
+          document.head.appendChild(s);
+        });
+      }
+      const worker = await Tesseract.createWorker("eng");
+      texts = [];
+      for (let p = 1; p <= S.pdfPages; p++){
+        $("ocrbar").textContent = "Reading page " + p + " of " + S.pdfPages + "… (first run takes a couple of minutes; it's saved after that)";
+        const page = await S.pdf.getPage(p);
+        const vp = page.getViewport({ scale: 2 });
+        const c = document.createElement("canvas");
+        c.width = vp.width; c.height = vp.height;
+        await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+        const { data } = await worker.recognize(c);
+        texts.push(data.text || "");
+      }
+      await worker.terminate();
+      rec.ocr = texts;
+      await dbPut("pdfs", { id: rec.id, name: rec.name, ocr: texts });
+    } catch(err){
+      $("ocrbar").textContent = "";
+      $("btnOcr").disabled = false;
+      S.ocrRunning = false;
+      return toast("Auto-match failed: " + err.message);
+    }
+  }
+  const n = autoMatch(S.M.rows, texts, S.M.summaryPage);
+  saveSoon(); renderPdf(); renderTable();
+  $("ocrbar").textContent = "";
+  $("btnOcr").disabled = false;
+  S.ocrRunning = false;
+  toast("Matched " + n + " of " + S.M.rows.length + " lines to PDF pages. Use 📎 to fix any that are off.");
+  selectRow(S.sel);
+}
+function autoMatch(rows, texts, skip){
+  const norm = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
+  let last = 0, n = 0;
+  const claimed = new Set();
+  rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); r.pages.forEach(p => claimed.add(p)); });
+  rows.forEach(r => {
+    if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
+    const iv = normInv(r.inv);
+    if (iv.length >= 4){
+      const hits = [];
+      for (let p = 0; p < norm.length; p++){ if (p !== skip && norm[p].includes(iv)) hits.push(p); }
+      if (hits.length){
+        r.pages = hits; r.page = hits[0];
+        hits.forEach(p => claimed.add(p));
+        last = hits[hits.length - 1]; n++;
+        return;
+      }
+    }
+    const k = Math.abs(r.amount).toFixed(2);
+    let found = null;
+    for (let off = 0; off < norm.length; off++){
+      const p = (last + off) % norm.length;
+      if (p === skip || claimed.has(p)) continue;
+      if (norm[p].includes(k)){ found = p; break; }
+    }
+    if (found !== null){ r.pages = [found]; r.page = found; claimed.add(found); last = found; n++; }
+  });
+  return n;
+}
+
+/* ---------- export ---------- */
+/*XL-START*/
+async function buildWorkbook(M){
+  const wb = new ExcelJS.Workbook();
+  const GREEN = "FFC6EFCE", GREENTX = "FF1F6D3B", ORANGE = "FFFFDDA8", ORANGETX = "FF8A4B08", RED = "FFC00000";
+  const ws = wb.addWorksheet("Aging review");
+  ws.columns = [
+    { header: "Vendor", key: "vendor", width: 32 },
+    { header: "Invoice #", key: "inv", width: 16 },
+    { header: "Invoice date", key: "date", width: 12 },
+    { header: "Account", key: "gl", width: 26 },
+    { header: "Description", key: "desc", width: 40 },
+    { header: "Amount", key: "base", width: 12, style: { numFmt: '#,##0.00' } },
+    { header: "HST/tax", key: "hst", width: 10, style: { numFmt: '#,##0.00' } },
+    { header: "Total", key: "amount", width: 13, style: { numFmt: '#,##0.00' } },
+    { header: "Status", key: "status", width: 12 },
+    { header: "Notes / questions", key: "note", width: 46 },
+  ];
+  ws.spliceRows(1, 0, [M.building + " — payables review — " + moLabel(M.period)], []);
+  ws.getRow(1).font = { bold: true, size: 13 };
+  const hdr = ws.getRow(3);
+  hdr.font = { bold: true };
+  hdr.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEEE8" } }; c.border = { bottom: { style: "thin" } }; });
+  const stLabel = { approved: "Approved", question: "Question", hold: "On hold" };
+  M.rows.forEach(r => {
+    const row = ws.addRow({ vendor: r.vendor, inv: r.inv, date: r.date, gl: r.gl, desc: r.desc, base: (r.base == null ? null : r.base), hst: (r.hst == null ? null : r.hst), amount: r.amount, status: stLabel[r.status] || "", note: r.note || "" });
+    if (r.status === "approved"){
+      row.eachCell({ includeEmpty: true }, c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } }; });
+      row.getCell("status").font = { color: { argb: GREENTX }, bold: true };
+    } else if (r.status === "hold"){
+      row.eachCell({ includeEmpty: true }, c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ORANGE } }; });
+      row.getCell("status").font = { color: { argb: ORANGETX }, bold: true };
+      row.getCell("note").font = { color: { argb: ORANGETX }, bold: true };
+    }
+    if (r.status === "question"){
+      row.getCell("note").font = { color: { argb: RED }, bold: true };
+      row.getCell("status").font = { color: { argb: RED }, bold: true };
+    }
+  });
+  const totRow = ws.addRow({ vendor: "Grand total", amount: M.rows.reduce((s,r) => s + r.amount, 0) });
+  totRow.font = { bold: true };
+  totRow.getCell("amount").numFmt = '#,##0.00';
+  totRow.eachCell({ includeEmpty: true }, c => { c.border = { top: { style: "thin" } }; });
+
+  const flagged = M.rows.filter(r => r.status === "question" || r.status === "hold");
+  if (flagged.length){
+    const ws2 = wb.addWorksheet("Open items");
+    ws2.columns = [
+      { header: "Vendor", key: "vendor", width: 32 },
+      { header: "Invoice #", key: "inv", width: 16 },
+      { header: "Amount", key: "amount", width: 13, style: { numFmt: '#,##0.00' } },
+      { header: "Status", key: "status", width: 12 },
+      { header: "Question / note", key: "note", width: 60 },
+    ];
+    ws2.getRow(1).font = { bold: true };
+    flagged.forEach(r => {
+      const row = ws2.addRow({ vendor: r.vendor, inv: r.inv, amount: r.amount, status: stLabel[r.status], note: r.note });
+      const col = r.status === "question" ? RED : ORANGETX;
+      row.getCell("note").font = { color: { argb: col }, bold: true };
+      row.getCell("status").font = { color: { argb: col }, bold: true };
+    });
+  }
+  return wb;
+}
+/*XL-END*/
+async function exportXlsx(){
+  await saveNow();
+  const wb = await buildWorkbook(S.M);
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = S.M.building + " - Review - " + S.M.period + ".xlsx";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Exported. Attach it to your email to the property manager.");
+}
+
+/* ---------- keyboard ---------- */
+function reviewKeydown(e){
+  if (S.screen !== "review") return;
+  const doc = (e.view && e.view.document) || document;
+  const typing = /INPUT|TEXTAREA|SELECT/.test((doc.activeElement && doc.activeElement.tagName) || "");
+  if (e.key === "Escape" && typing){ doc.activeElement.blur(); return; }
+  if (typing) return;
+  const vis = visibleIdx();
+  const pos = vis.indexOf(S.sel);
+  if (e.key === "ArrowDown"){ e.preventDefault(); if (pos < vis.length - 1) selectRow(vis[pos + 1]); }
+  else if (e.key === "ArrowUp"){ e.preventDefault(); if (pos > 0) selectRow(vis[pos - 1]); }
+  else if (e.key === "ArrowRight"){ e.preventDefault(); pdfPage(1); }
+  else if (e.key === "ArrowLeft"){ e.preventDefault(); pdfPage(-1); }
+  else if (e.key === "a" || e.key === "A"){ act("approved"); }
+  else if (e.key === "q" || e.key === "Q"){ act("question"); }
+  else if (e.key === "h" || e.key === "H"){ act("hold"); }
+  else if (e.key === "l" || e.key === "L"){ linkPage(); }
+}
+document.addEventListener("keydown", reviewKeydown);
+window.addEventListener("resize", () => { if (S.screen === "review" && S.pdf) renderPdf(); });
+window.addEventListener("beforeunload", () => { if (S.M) saveNow(); if (S.pop && !S.pop.closed) S.pop.close(); });
+
+boot();
+</script>
+</body>
+</html>
