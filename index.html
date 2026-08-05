@@ -227,6 +227,18 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
   </div>
 </main>
 
+<div id="oldview" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:60;display:flex;flex-direction:column">
+  <div style="background:#1a1a18;color:#fff;padding:8px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <span id="ovinfo" style="font-weight:600"></span>
+    <span style="flex:1"></span>
+    <button id="ovprev" style="background:#2e2e2b;color:#fff;border-color:#555">◀</button>
+    <span id="ovpg" style="min-width:70px;text-align:center"></span>
+    <button id="ovnext" style="background:#2e2e2b;color:#fff;border-color:#555">▶</button>
+    <button id="ovclose" style="background:#2e2e2b;color:#fff;border-color:#555">✕ Close</button>
+  </div>
+  <div id="ovwrap" style="flex:1;overflow:auto;text-align:center"><canvas id="ovcanvas" style="background:#fff;margin:10px auto;box-shadow:0 1px 8px rgba(0,0,0,.5)"></canvas></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1057,16 +1069,25 @@ function renderRight(){
     + (r.base != null ? '<div class="rowmeta" style="white-space:nowrap">$'+fmt(r.base)+(r.hst != null ? ' + $'+fmt(r.hst)+' tax' : '')+'</div>' : '') + '</div></div>'
     + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "");
   const k = vkey(r.vendor);
+  S._histRefs = [];
   const cells = [];
-  [...S.prior].reverse().slice(-3).forEach(mo => {
-    const t = vendorTotals(mo.rows)[k];
-    if (t !== undefined) cells.push('<div class="histcell"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(t)+'</div></div>');
+  const seenH = new Set();
+  const curKey = normInv(r.inv) + "|" + r.amount;
+  [...S.prior].reverse().forEach(mo => {
+    (mo.rows || []).forEach(x => {
+      if (vkey(x.vendor) !== k) return;
+      const hk = (normInv(x.inv) || "") + "|" + x.amount;
+      if (hk === curKey || seenH.has(hk)) return;
+      seenH.add(hk);
+      const refIdx = S._histRefs.length;
+      S._histRefs.push({ monthId: mo.id, period: mo.period, vendor: x.vendor, inv: x.inv, amount: x.amount, pages: x.pages || (x.page != null ? [x.page] : []) });
+      cells.push('<div class="histcell" style="cursor:pointer" title="'+esc((x.inv ? "#"+x.inv+" · " : "")+(x.desc || "")+" — click to see this invoice")+'" onclick="viewOldInvoice('+refIdx+')"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(x.amount)+'</div><div class="m" style="color:var(--blue)">view ↗</div></div>');
+    });
   });
-  const nowT = vendorTotals(S.M.rows)[k];
-  cells.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(nowT)+'</b></div></div>');
-  $("hist").innerHTML = r.jobId ? "" : (S.prior.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — total by month</div>' : "")
-    + '<div class="histstrip">'+cells.join("")+'</div>'
-    + priorInvoicesHtml(k);
+  const shown = cells.slice(-10);
+  shown.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(r.amount)+'</b></div><div class="m">this bill</div></div>');
+  $("hist").innerHTML = (cells.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — each past invoice separately (click one to open it)</div>' : "")
+    + '<div class="histstrip">'+shown.join("")+'</div>';
   renderJob(r);
   const dupe = dupeMsgs(r, S.sel);
   $("dupebox").innerHTML = dupe.map(m => {
@@ -1186,8 +1207,9 @@ function jobInvoices(jobId){
     if (r.jobId === jobId){
       const key = vkey(r.vendor) + "|" + (normInv(r.inv) || (r.amount + "|" + r.date));
       const e = seen.get(key);
-      if (!e) seen.set(key, { inv: r.inv, amount: r.amount, desc: r.desc, period: mo.period });
-      else e.period = mo.period;
+      const pgs = r.pages || (r.page != null ? [r.page] : []);
+      if (!e) seen.set(key, { inv: r.inv, amount: r.amount, desc: r.desc, period: mo.period, monthId: mo.id, vendor: r.vendor, pages: pgs });
+      else { e.period = mo.period; e.monthId = mo.id; if (pgs.length) e.pages = pgs; }
     }
   }));
   return [...seen.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
@@ -1222,7 +1244,14 @@ function renderJob(r){
       + '<div style="margin-top:4px">Billed so far on this job: <b>$' + fmt(billed) + '</b> (' + invs.length + ' invoice' + (invs.length > 1 ? 's' : '') + ', incl. this one)'
       + (j.budget ? ' — ' + Math.round(billed / j.budget * 100) + '% of contract, $' + fmt(Math.max(j.budget - billed, 0)) + ' left' : '') + '</div>'
       + (j.budget && billed > j.budget + 0.005 ? '<div style="color:var(--red);margin-top:2px">⚠️ Billing has passed the contract total by $' + fmt(billed - j.budget) + '</div>' : '')
-      + '<div style="margin-top:4px">' + invs.map(x => '<span style="margin-right:10px;white-space:nowrap;' + (normInv(x.inv) === normInv(r.inv) && x.amount === r.amount ? 'font-weight:600' : '') + '">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>').join("") + '</div>'
+      + '<div style="margin-top:4px">' + invs.map(x => {
+          const isCur = normInv(x.inv) === normInv(r.inv) && x.amount === r.amount;
+          if (isCur) return '<span style="margin-right:10px;white-space:nowrap;font-weight:600">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>';
+          if (!S._histRefs) S._histRefs = [];
+          const refIdx = S._histRefs.length;
+          S._histRefs.push({ monthId: x.monthId, period: x.period, vendor: x.vendor || r.vendor, inv: x.inv, amount: x.amount, pages: x.pages || [] });
+          return '<span style="margin-right:10px;white-space:nowrap;cursor:pointer;text-decoration:underline" title="Click to see this invoice" onclick="viewOldInvoice(' + refIdx + ')">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>';
+        }).join("") + '</div>'
       + (S.readonly ? '' : '<div style="margin-top:4px" class="small"><a href="#" onclick="unassignJob();return false">remove from job</a></div>')
       + '</div>';
     return;
@@ -1278,6 +1307,45 @@ function editJobBudget(id){
   j.budget = bud || null;
   saveJobs(); renderRight();
 }
+
+/* ---------- old-invoice overlay viewer ---------- */
+const OV = { doc: null, page: 1, pages: [] };
+async function viewOldInvoice(idx){
+  const ref = S._histRefs && S._histRefs[idx];
+  if (!ref) return;
+  try{
+    toast("Loading that invoice…");
+    const rec = await dbGet("pdfs", ref.monthId);
+    if (!rec || !rec.blob){ toast("No backup PDF is attached to the " + moLabel(ref.period) + " package."); return; }
+    await ensureWorker();
+    const buf = await rec.blob.arrayBuffer();
+    OV.doc = await pdfjsLib.getDocument({ data: buf }).promise;
+    OV.pages = ref.pages || [];
+    OV.page = Math.min((OV.pages.length ? OV.pages[0] : 0) + 1, OV.doc.numPages);
+    $("ovinfo").textContent = ref.vendor + " — " + moLabel(ref.period) + " · $" + fmt(ref.amount) + (ref.inv ? " · #" + ref.inv : "") + (OV.pages.length ? "" : " (no page linked — flip with ◀ ▶)");
+    $("oldview").classList.remove("hidden");
+    renderOV();
+  } catch(err){ toast("Couldn't open it: " + err.message); }
+}
+async function renderOV(){
+  if (!OV.doc) return;
+  const page = await OV.doc.getPage(OV.page);
+  const wrap = $("ovwrap");
+  const dpr = window.devicePixelRatio || 1;
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.max(Math.min((wrap.clientWidth - 40) / base.width, 1.6), 0.3) * dpr;
+  const vp = page.getViewport({ scale });
+  const c = $("ovcanvas");
+  c.width = vp.width; c.height = vp.height;
+  c.style.width = (vp.width / dpr) + "px";
+  c.style.height = (vp.height / dpr) + "px";
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  $("ovpg").textContent = OV.page + " / " + OV.doc.numPages + (OV.pages.includes(OV.page - 1) ? " 📎" : "");
+}
+function closeOV(){ $("oldview").classList.add("hidden"); OV.doc = null; }
+document.getElementById("ovprev").onclick = () => { if (OV.doc && OV.page > 1){ OV.page--; renderOV(); } };
+document.getElementById("ovnext").onclick = () => { if (OV.doc && OV.page < OV.doc.numPages){ OV.page++; renderOV(); } };
+document.getElementById("ovclose").onclick = closeOV;
 
 /* ---------- PDF viewer ---------- */
 async function ensureWorker(){
@@ -1578,6 +1646,14 @@ async function exportXlsx(){
 /* ---------- keyboard ---------- */
 function reviewKeydown(e){
   if (S.screen !== "review") return;
+  const ovEl = $("oldview");
+  if (ovEl && !ovEl.classList.contains("hidden")){
+    if (e.key === "Escape") closeOV();
+    else if (e.key === "ArrowRight"){ if (OV.doc && OV.page < OV.doc.numPages){ OV.page++; renderOV(); } }
+    else if (e.key === "ArrowLeft"){ if (OV.doc && OV.page > 1){ OV.page--; renderOV(); } }
+    e.preventDefault();
+    return;
+  }
   const doc = (e.view && e.view.document) || document;
   const typing = /INPUT|TEXTAREA|SELECT/.test((doc.activeElement && doc.activeElement.tagName) || "");
   if (e.key === "Escape" && typing){ doc.activeElement.blur(); return; }
