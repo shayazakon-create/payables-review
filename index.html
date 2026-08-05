@@ -255,6 +255,7 @@ let sb = null;
 /* ---------- data layer (Supabase-backed, same interface as before) ---------- */
 const _cache = { months: null };
 const _pdfBlobCache = {};
+function pdfKey(id){ return String(id).replace(/[^a-zA-Z0-9._-]/g, "_") + ".pdf"; }
 async function dbAll(st){
   if (st === "months"){
     if (_cache.months) return _cache.months;
@@ -276,7 +277,7 @@ async function dbGet(st, key){
     const meta = await dbGet("kv", "pdfmeta|" + key);
     if (!meta || !meta.v || !meta.v.exists) return undefined;
     if (!_pdfBlobCache[key]){
-      const { data, error } = await sb.storage.from("pdfs").download(key + ".pdf");
+      const { data, error } = await sb.storage.from("pdfs").download(pdfKey(key));
       if (error) return undefined;
       _pdfBlobCache[key] = data;
     }
@@ -296,7 +297,7 @@ async function dbPut(st, v){
   }
   if (st === "pdfs"){
     if (v.blob){
-      const { error } = await sb.storage.from("pdfs").upload(v.id + ".pdf", v.blob, { upsert: true, contentType: "application/pdf" });
+      const { error } = await sb.storage.from("pdfs").upload(pdfKey(v.id), v.blob, { upsert: true, contentType: "application/pdf" });
       if (error) throw error;
       _pdfBlobCache[v.id] = v.blob;
     }
@@ -309,7 +310,7 @@ async function dbPut(st, v){
 }
 async function dbDel(st, key){
   if (st === "pdfs"){
-    await sb.storage.from("pdfs").remove([key + ".pdf"]);
+    await sb.storage.from("pdfs").remove([pdfKey(key)]);
     await dbDel("kv", "pdfmeta|" + key);
     delete _pdfBlobCache[key];
     return;
@@ -424,13 +425,18 @@ function parseRows(rows, h, skip, m){
     if (typeof nameC === "string" && nameC.trim()) cur = nameC.trim();
     const amt = m.amount >= 0 ? toNum(r[m.amount]) : null;
     if (amt === null || amt === 0) continue;
+    const invS = String(m.inv >= 0 && r[m.inv] != null ? r[m.inv] : "").trim();
+    const dateS = m.date >= 0 ? fmtDate(r[m.date]) : "";
+    const descS = String(m.desc >= 0 && r[m.desc] != null ? r[m.desc] : "").trim();
+    const glS = String(m.gl >= 0 && r[m.gl] != null ? r[m.gl] : "").trim();
+    if (!invS && !dateS && !descS && !glS) continue;
     out.push({
       vendor: (typeof nameC === "string" && nameC.trim()) ? nameC.trim() : cur,
-      inv: String(m.inv >= 0 && r[m.inv] != null ? r[m.inv] : "").trim(),
-      date: m.date >= 0 ? fmtDate(r[m.date]) : "",
+      inv: invS,
+      date: dateS,
       amount: amt,
-      desc: String(m.desc >= 0 && r[m.desc] != null ? r[m.desc] : "").trim(),
-      gl: String(m.gl >= 0 && r[m.gl] != null ? r[m.gl] : "").trim(),
+      desc: descS,
+      gl: glS,
       status: null, note: "", page: null
     });
   }
@@ -501,7 +507,7 @@ async function shareMonth(){
   let pdfUrl = null;
   const meta = await dbGet("kv", "pdfmeta|" + id);
   if (meta && meta.v && meta.v.exists){
-    const { data } = await sb.storage.from("pdfs").createSignedUrl(id + ".pdf", 60 * 60 * 24 * 30);
+    const { data } = await sb.storage.from("pdfs").createSignedUrl(pdfKey(id), 60 * 60 * 24 * 30);
     if (data) pdfUrl = data.signedUrl;
   }
   await dbPut("kv", { k: "share|" + id, v: { monthId: id, token, pdfUrl, created: new Date().toISOString() } });
