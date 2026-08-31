@@ -222,7 +222,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
         <button id="btnOcr" onclick="runOcr()" title="Reads the scanned pages and automatically links each line to its invoice page">✨ Auto-match pages</button>
       </div>
       <div id="ocrbar"></div>
-      <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px">No backup PDF attached to this package.<br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
+      <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px"><span id="nopdfmsg">No backup PDF attached to this package.</span><br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button> <button id="btnPdfRetry" class="hidden" onclick="retryPdf()">Try again</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
     </div>
   </div>
 </main>
@@ -707,7 +707,7 @@ async function loadSharedPdf(url){
     pdfFit();
   } catch(err){
     $("pdfcanvas").classList.add("hidden");
-    $("nopdf").textContent = "The PDF part of this link has expired — ask for a fresh link.";
+    $("nopdfmsg").textContent = "The PDF part of this link has expired — ask for a fresh link.";
     $("nopdf").classList.remove("hidden");
   }
 }
@@ -943,8 +943,12 @@ async function startReview(){
   if (S.imp.pdfFile){
     const buf = await S.imp.pdfFile.arrayBuffer();
     await dbPut("pdfs", { id, blob: new Blob([buf], { type: "application/pdf" }), name: S.imp.pdfFile.name, ocr: null });
-  } else {
-    await dbDel("pdfs", id);
+  } else if (existing){
+    /* Re-importing the spreadsheet alone used to delete the stored backup PDF,
+       which is the opposite of what anyone re-importing to correct a column
+       expects. Keep it; deleting the month still removes it. */
+    const kept = await dbGet("pdfs", id).catch(() => null);
+    if (kept) toast("Kept the backup PDF already attached to this month. Use ✨ Auto-match pages to re-link the invoices.");
   }
   openMonth(id);
 }
@@ -1641,12 +1645,24 @@ async function ensureWorker(){
     }
   }
 }
+function retryPdf(){ if (S.M) loadPdf(S.M.id); }
 async function loadPdf(id){
   S.pdf = null; S.pdfPageNum = 1; S.pdfPages = 0;
   $("pglabel").textContent = "– / –";
   $("nopdf").classList.add("hidden");
-  const rec = await dbGet("pdfs", id);
-  if (!rec){ $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); $("btnOcr").disabled = true; return; }
+  const rec = await dbGet("pdfs", id).catch(() => null);
+  if (!rec){
+    /* "No PDF attached" and "the PDF is attached but would not download" look
+       identical from here, and they need opposite responses. Check the record. */
+    const meta = await dbGet("kv", "pdfmeta|" + id).catch(() => null);
+    const attached = !!(meta && meta.v && meta.v.exists);
+    $("nopdfmsg").textContent = attached
+      ? "This package has a backup PDF (" + (meta.v.name || "PDF") + "), but it couldn't be downloaded just now — usually a connection problem. Try again, or re-attach the file."
+      : "No backup PDF attached to this package.";
+    $("btnPdfRetry").classList.toggle("hidden", !attached);
+    $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); $("btnOcr").disabled = true;
+    return;
+  }
   $("btnOcr").disabled = false;
   $("pdfcanvas").classList.remove("hidden");
   try{
