@@ -339,7 +339,63 @@ const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.style.opacity=1; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity=0, 2600); }
 function fmt(n){ return Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
-function vkey(name){ return String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,14); }
+const _vkCache = new Map();
+function vkeyFull(name){
+  const s = String(name == null ? "" : name);
+  let v = _vkCache.get(s);
+  if (v === undefined){ v = s.toLowerCase().replace(/[^a-z0-9]/g,""); _vkCache.set(s, v); }
+  return v;
+}
+function vkey(name){ return vkeyFull(name).slice(0,14); }
+/* Vendor names drift between agings: "BELL" one month and "BELL CANADA" the
+   next, "Burlington Hydro" vs "Burlington Hydro Electricity Inc", "Enbridge"
+   vs "Enbridge Gas Distribution". Two names count as the same vendor when the
+   squashed names match, or when one name's words are the opening words of the
+   other. Legal suffixes (inc/ltd/corp...) are ignored. "Bell" still does NOT
+   match "Bellwood Roofing" — the split has to fall on a word boundary. */
+const _VSTOP = { inc:1, incorporated:1, ltd:1, ltee:1, limited:1, llc:1, llp:1, lp:1,
+                 corp:1, corporation:1, co:1, company:1, the:1, plc:1, ulc:1, "&":1, and:1 };
+const _vtCache = new Map();
+function vtokens(name){
+  const s = String(name == null ? "" : name);
+  let t = _vtCache.get(s);
+  if (t === undefined){
+    t = s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !_VSTOP[w]);
+    _vtCache.set(s, t);
+  }
+  return t;
+}
+/* When one vendor bills several lines a month (two Bell accounts, gas + water
+   from one utility), the vendor name alone can't tell them apart. lineSig()
+   builds a per-line fingerprint from the account number in the description,
+   the invoice-number stem, the GL account, or failing that the description
+   wording — so each line gets its own history instead of the vendor's. */
+function lineSig(r){
+  if (!r) return "";
+  const acct = String(r.desc || "").match(/(?:acc?t|account|no\.?|#)\s*[:#]?\s*(\d[\d\- ]{4,})/i)
+            || String(r.desc || "").match(/\b(\d{3}[\- ]\d{3}[\- ]\d{4})\b/)
+            || String(r.desc || "").match(/\b(\d[\d\- ]{8,})\b/);
+  if (acct) return "a:" + acct[1].replace(/\D/g, "");
+  const b = invBase(r.inv);
+  if (b) return "i:" + b;
+  const g = vkeyFull(r.gl);
+  if (g) return "g:" + g;
+  const d = vtokens(r.desc).slice(0, 3).join("");
+  return d.length >= 4 ? "d:" + d : "";
+}
+function sameVendor(a, b){
+  const x = vkeyFull(a), y = vkeyFull(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if (x.slice(0,14) === y.slice(0,14)) return true;
+  const shortS = x.length <= y.length ? x : y, longS = x.length <= y.length ? y : x;
+  if (shortS.length >= 5 && longS.indexOf(shortS) === 0) return true;
+  const ta = vtokens(a), tb = vtokens(b);
+  if (!ta.length || !tb.length) return false;
+  const st = ta.length <= tb.length ? ta : tb, lt = ta.length <= tb.length ? tb : ta;
+  for (let i = 0; i < st.length; i++) if (st[i] !== lt[i]) return false;
+  return st.length >= 2 || st[0].length >= 4;
+}
 function normInv(inv){ const s=String(inv||"").toLowerCase().replace(/[^a-z0-9]/g,""); return s.length>=3 ? s : ""; }
 function moLabel(period){
   const p = String(period).split("-");
@@ -423,9 +479,38 @@ function autoMap(labels){
     inv:    find([/invoice\s*#/i, /inv(oice)?\s*(no|num)/i, /invoice$/i, /reference/i, /^inv/i]),
     date:   find([/invoice\s*date/i, /^date/i, /date/i]),
     amount: find([/current\s*owed/i, /^current/i, /amount\s*due/i, /total\s*due/i, /^amount/i, /balance/i, /owed/i, /amount/i, /total/i]),
+    base:   -1,
+    tax:    find([/\bh\.?s\.?t\.?\b/i, /\bg\.?s\.?t\.?\b/i, /\bq\.?s\.?t\.?\b/i, /\bp\.?s\.?t\.?\b/i, /\bvat\b/i, /sales\s*tax/i, /\btaxe?s?\b/i]),
     desc:   find([/notes/i, /description/i, /memo/i, /detail/i]),
     gl:     find([/account/i, /\bg\.?l\.?\b/i]),
   };
+}
+/* Some agings (UBRP) list the invoice net, then the HST, then the real total.
+   A plain "Amount" heading wins the column guess above, which would put the
+   pre-tax figure on the review — a $151.00 bill showing as $134.00. When a tax
+   column and a separate total column both exist AND net + tax = total actually
+   holds on the sheet's own rows, switch to the total and keep the net and tax
+   for the breakdown. The arithmetic check is what makes this safe for agings
+   that have only one amount column. */
+function fixGrossAmount(grid, hdr, skip, map, labels){
+  const find = res => { for (const re of res){ const i = labels.findIndex(l => re.test(l)); if (i >= 0) return i; } return -1; };
+  const totC = find([/total\s*due/i, /invoice\s*total/i, /total\s*amount/i, /^total\b/i, /\btotal\b/i, /^gross/i]);
+  const taxC = map.tax;
+  if (totC < 0 || taxC < 0 || totC === taxC) return map;
+  const netC = map.base >= 0 ? map.base : map.amount;
+  if (netC < 0 || netC === totC || netC === taxC) return map;
+  let ok = 0, seen = 0;
+  for (let i = hdr + skip; i < grid.length && seen < 40; i++){
+    const r = grid[i] || [];
+    const n = toNum(r[netC]), t = toNum(r[taxC]), g = toNum(r[totC]);
+    if (n === null || g === null || n === 0) continue;
+    seen++;
+    if (Math.abs(n + (t || 0) - g) <= 0.02) ok++;
+  }
+  if (seen >= 3 && ok >= Math.ceil(seen * 0.8)){
+    map.base = netC; map.amount = totC; map.tax = taxC;
+  }
+  return map;
 }
 function parseRows(rows, h, skip, m){
   const out = [];
@@ -436,8 +521,12 @@ function parseRows(rows, h, skip, m){
     if (firstText && /^(total\b|grand\s*total)/i.test(firstText.trim())) continue;
     const nameC = m.vendor >= 0 ? r[m.vendor] : null;
     if (typeof nameC === "string" && nameC.trim()) cur = nameC.trim();
-    const amt = m.amount >= 0 ? toNum(r[m.amount]) : null;
+    const baseV = m.base >= 0 ? toNum(r[m.base]) : null;
+    const taxV  = m.tax  >= 0 ? toNum(r[m.tax])  : null;
+    let amt = m.amount >= 0 ? toNum(r[m.amount]) : null;
+    if (amt === null && baseV !== null) amt = baseV + (taxV || 0);
     if (amt === null || amt === 0) continue;
+    const splitOut = baseV !== null && Math.abs(baseV - amt) > 0.005;
     const invS = String(m.inv >= 0 && r[m.inv] != null ? r[m.inv] : "").trim();
     const dateS = m.date >= 0 ? fmtDate(r[m.date]) : "";
     const descS = String(m.desc >= 0 && r[m.desc] != null ? r[m.desc] : "").trim();
@@ -448,6 +537,8 @@ function parseRows(rows, h, skip, m){
       inv: invS,
       date: dateS,
       amount: amt,
+      base: splitOut ? baseV : null,
+      hst: splitOut ? taxV : null,
       desc: descS,
       gl: glS,
       status: null, note: "", page: null
@@ -467,7 +558,7 @@ const S = {
   pdf: null,        // pdfjs document
   pdfPageNum: 1, pdfPages: 0, zoom: 1, fitScale: 1,
   imp: { grid: null, hdr: -1, skip: 1, map: null, rows: [], pdfFile: null, xlsxName: "" },
-  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [],
+  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [], histAll: false, pdfGuess: false,
 };
 
 function show(scr){
@@ -711,7 +802,7 @@ async function handleXlsx(file){
     S.imp.grid = grid; S.imp.hdr = hdr; S.imp.skip = skip; S.imp.labels = labels; S.imp.xlsxName = file.name;
     const per = detectPeriod(grid, file.name);
     if (per){ $("inPeriod").value = per.length === 7 ? per + "-01" : per; toast("Date detected from the report: " + moLabel(per)); }
-    const auto = autoMap(labels);
+    const auto = fixGrossAmount(grid, hdr, skip, autoMap(labels), labels);
     let map = auto;
     const saved = await dbGet("kv", "map|" + vkey(getBuilding()));
     if (saved && saved.v){
@@ -730,6 +821,9 @@ async function handleXlsx(file){
       const nAuto = parseRows(grid, hdr, skip, auto).length;
       if (nCand > 0 && nCand >= nAuto) map = cand;
     }
+    /* A map saved before the tax fix could point back at the pre-tax column,
+       so re-check it against the sheet's own arithmetic. */
+    map = fixGrossAmount(grid, hdr, skip, map, labels);
     S.imp.map = map;
     $("gridbox").classList.add("hidden"); GR = []; S.imp.summaryPage = null;
     $("dzX").classList.add("has");
@@ -742,7 +836,7 @@ function handlePdf(file){
   $("dzP").classList.add("has");
   $("dzP").querySelector("b").textContent = file.name;
 }
-const MAPFIELDS = [["vendor","Vendor name"],["inv","Invoice #"],["date","Invoice date"],["amount","Amount owed"],["desc","Description / notes"],["gl","Account / GL (optional)"]];
+const MAPFIELDS = [["vendor","Vendor name"],["inv","Invoice #"],["date","Invoice date"],["amount","Amount owed — the total WITH tax"],["base","Amount before tax (optional)"],["tax","HST / tax (optional)"],["desc","Description / notes"],["gl","Account / GL (optional)"]];
 function renderMapping(){
   const { labels, map, grid, hdr, skip } = S.imp;
   const opts = i => '<option value="-1">— none —</option>' + labels.map((l, j) => {
@@ -763,7 +857,10 @@ function refreshPreview(){
   const rows = parseRows(grid, hdr, skip, map);
   S.imp.rows = rows;
   const tot = rows.reduce((s,r) => s + r.amount, 0);
-  $("pvcount").textContent = rows.length + " invoices, total $" + fmt(tot);
+  const withTax = rows.filter(r => r.base != null).length;
+  $("pvcount").textContent = rows.length + " invoices, total $" + fmt(tot)
+    + (withTax ? "  ·  amounts include tax" : "")
+    + "  —  this total should match the grand total on your spreadsheet";
   $("pvtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th></tr>'
     + rows.slice(0, 12).map(r => '<tr><td>'+esc(r.vendor)+'</td><td>'+esc(r.inv)+'</td><td>'+esc(r.date)+'</td><td style="text-align:right">$'+fmt(r.amount)+'</td><td class="desc-cell">'+esc(r.desc)+'</td></tr>').join("")
     + (rows.length > 12 ? '<tr><td colspan="5" class="muted">… and '+(rows.length-12)+' more</td></tr>' : '') + '</table>';
@@ -962,7 +1059,9 @@ async function openMonth(id){
   M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
   document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
   const all = await dbAll("months");
-  S.prior = all.filter(m => m.building === M.building && m.period < M.period).sort((a,b) => b.period.localeCompare(a.period));
+  const bk = vkey(M.building);
+  S.prior = all.filter(m => m.id !== M.id && vkey(m.building) === bk && String(m.period) < String(M.period)).sort((a,b) => b.period.localeCompare(a.period));
+  S._deltaCache = new Map();
   await loadJobs(M.building);
   autoAssignJobs();
   $("hdrctx").textContent = M.building + " — " + moLabel(M.period);
@@ -991,15 +1090,25 @@ function vendorTotals(rows){
   rows.forEach(r => { const k = vkey(r.vendor); t[k] = (t[k] || 0) + r.amount; });
   return t;
 }
+/* total billed by one vendor on a set of rows, or null if the vendor isn't there */
+function vendorSum(rows, name){
+  let t = null;
+  (rows || []).forEach(r => { if (sameVendor(r.vendor, name)) t = (t || 0) + r.amount; });
+  return t;
+}
 function rowDelta(row){
   if (!S.prior.length) return null;
-  const k = vkey(row.vendor);
-  const nowT = vendorTotals(S.M.rows)[k];
+  if (!S._deltaCache) S._deltaCache = new Map();
+  const ck = vkeyFull(row.vendor);
+  if (S._deltaCache.has(ck)) return S._deltaCache.get(ck);
+  const nowT = vendorSum(S.M.rows, row.vendor);
+  let out = { prev: null };
   for (const mo of S.prior){
-    const pt = vendorTotals(mo.rows)[k];
-    if (pt !== undefined) return { prev: pt, period: mo.period, pct: pt ? Math.round((nowT - pt) / Math.abs(pt) * 100) : null };
+    const pt = vendorSum(mo.rows, row.vendor);
+    if (pt !== null){ out = { prev: pt, period: mo.period, pct: pt ? Math.round((nowT - pt) / Math.abs(pt) * 100) : null }; break; }
   }
-  return { prev: null };
+  S._deltaCache.set(ck, out);
+  return out;
 }
 function renderTable(){
   const body = $("revbody");
@@ -1028,11 +1137,11 @@ function renderTable(){
 }
 function dupeMsgs(row, idx){
   const msgs = [];
-  const iv = normInv(row.inv), k = vkey(row.vendor);
+  const iv = normInv(row.inv);
   if (iv){
-    S.M.rows.forEach((r, j) => { if (j !== idx && normInv(r.inv) === iv && vkey(r.vendor) === k) msgs.push("Invoice #" + row.inv + " appears twice on this month's aging."); });
+    S.M.rows.forEach((r, j) => { if (j !== idx && normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor)) msgs.push("Invoice #" + row.inv + " appears twice on this month's aging."); });
     for (const mo of S.prior){
-      const hit = mo.rows.find(r => normInv(r.inv) === iv && vkey(r.vendor) === k);
+      const hit = (mo.rows || []).find(r => normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor));
       if (hit){
         let m = "Also on the " + moLabel(mo.period) + " aging ($" + fmt(hit.amount) + ")";
         if (hit.status) m += " — you marked it \"" + hit.status + "\"" + (hit.note ? ": “" + hit.note + "”" : "");
@@ -1042,20 +1151,43 @@ function dupeMsgs(row, idx){
     }
   } else {
     for (const mo of S.prior){
-      const hit = mo.rows.find(r => vkey(r.vendor) === k && r.amount === row.amount && r.date === row.date);
+      const hit = (mo.rows || []).find(r => sameVendor(r.vendor, row.vendor) && r.amount === row.amount && r.date === row.date);
       if (hit){ msgs.push("Same vendor, amount and date as a line on the " + moLabel(mo.period) + " aging."); break; }
     }
   }
   return [...new Set(msgs)];
 }
+function toggleHistAll(){ S.histAll = !S.histAll; renderRight(); }
 function selectRow(i){
+  if (i !== S.sel) S.histAll = false;
   S.sel = i;
   renderTable(); renderRight();
   const r = S.M.rows[i];
   if (S.pdf){
     let pg = (r.pages && r.pages.length) ? r.pages[0] : null;
-    if (pg == null){ for (let j = i - 1; j >= 0; j--){ const pj = S.M.rows[j].pages; if (pj && pj.length){ pg = pj[pj.length - 1]; break; } } }
+    S.pdfGuess = false;
+    /* No page linked to this line: the backup PDF is normally in the same order
+       as the aging, so step forward one page per unlinked line instead of
+       parking on the previous line's invoice (which showed Bell's bill when
+       you clicked the line under it). */
+    if (pg == null){
+      for (let j = i - 1; j >= 0; j--){
+        const pj = S.M.rows[j].pages;
+        if (pj && pj.length){ pg = pj[pj.length - 1] + (i - j); break; }
+      }
+      if (pg == null){
+        for (let j = i + 1; j < S.M.rows.length; j++){
+          const pj = S.M.rows[j].pages;
+          if (pj && pj.length){ pg = pj[0] - (j - i); break; }
+        }
+      }
+      if (pg != null){
+        pg = Math.max(0, Math.min(pg, (S.pdfPages || 1) - 1));
+        S.pdfGuess = true;
+      }
+    }
     if (pg != null && pg + 1 !== S.pdfPageNum){ S.pdfPageNum = pg + 1; renderPdf(); }
+    renderPgLinks();
   }
   const tr = document.querySelector("#revbody tr.sel");
   if (tr) tr.scrollIntoView({ block: "nearest" });
@@ -1068,26 +1200,86 @@ function renderRight(){
     + '<div style="text-align:right"><div style="font-size:20px;font-weight:600;white-space:nowrap">$'+fmt(r.amount)+'</div>'
     + (r.base != null ? '<div class="rowmeta" style="white-space:nowrap">$'+fmt(r.base)+(r.hst != null ? ' + $'+fmt(r.hst)+' tax' : '')+'</div>' : '') + '</div></div>'
     + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "");
-  const k = vkey(r.vendor);
   S._histRefs = [];
   const cells = [];
   const seenH = new Set();
-  const curKey = normInv(r.inv) + "|" + r.amount;
+  let past = [];
+  const aliases = new Set();
+  const curInv = normInv(r.inv);
   [...S.prior].reverse().forEach(mo => {
     (mo.rows || []).forEach(x => {
-      if (vkey(x.vendor) !== k) return;
-      const hk = (normInv(x.inv) || "") + "|" + x.amount;
-      if (hk === curKey || seenH.has(hk)) return;
+      if (!sameVendor(x.vendor, r.vendor)) return;
+      /* The same still-unpaid invoice carried onto an earlier aging isn't a past
+         bill — it's this same one. Everything else is real history, including a
+         recurring bill that happens to repeat the same amount. */
+      const xInv = normInv(x.inv);
+      if (curInv && xInv && xInv === curInv) return;
+      if (!curInv && !xInv && x.amount === r.amount && String(x.date || "") === String(r.date || "")) return;
+      const hk = mo.id + "|" + xInv + "|" + x.amount + "|" + (x.date || "");
+      if (seenH.has(hk)) return;
       seenH.add(hk);
-      const refIdx = S._histRefs.length;
-      S._histRefs.push({ monthId: mo.id, period: mo.period, vendor: x.vendor, inv: x.inv, amount: x.amount, pages: x.pages || (x.page != null ? [x.page] : []) });
-      cells.push('<div class="histcell" style="cursor:pointer" title="'+esc((x.inv ? "#"+x.inv+" · " : "")+(x.desc || "")+" — click to see this invoice")+'" onclick="viewOldInvoice('+refIdx+')"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(x.amount)+'</div><div class="m" style="color:var(--blue)">view ↗</div></div>');
+      if (vkeyFull(x.vendor) !== vkeyFull(r.vendor)) aliases.add(x.vendor);
+      past.push({ mo: mo, x: x });
     });
+  });
+  /* Several lines from this vendor on this month's aging? Give each line its
+     own slice of the history instead of showing all of them the same strip. */
+  const sibs = S.M.rows.filter(x => sameVendor(x.vendor, r.vendor));
+  let splitNote = "", splitAll = past.length;
+  if (sibs.length > 1 && past.length && !S.histAll){
+    const mySig = lineSig(r);
+    const sigHits = mySig ? past.filter(pi => lineSig(pi.x) === mySig) : [];
+    const otherSigs = sibs.filter(x => x !== r).map(lineSig);
+    if (sigHits.length && mySig && otherSigs.indexOf(mySig) < 0){
+      past = sigHits;
+      splitNote = "matched to this account";
+    } else {
+      const mine = sibs.indexOf(r);
+      const near = past.filter(pi => {
+        let best = -1, bd = Infinity;
+        sibs.forEach((sb, i) => {
+          const d = Math.abs(sb.amount - pi.x.amount) / Math.max(Math.abs(sb.amount), 1);
+          if (d < bd - 1e-9){ bd = d; best = i; }
+        });
+        return best === mine;
+      });
+      if (near.length && near.length < past.length){
+        past = near;
+        splitNote = "closest match by amount — check the account number";
+      } else {
+        splitNote = "can't tell the " + sibs.length + " lines apart";
+      }
+    }
+  }
+  past.forEach(pi => {
+    const mo = pi.mo, x = pi.x;
+    const refIdx = S._histRefs.length;
+    S._histRefs.push({ monthId: mo.id, period: mo.period, vendor: x.vendor, inv: x.inv, amount: x.amount, pages: x.pages || (x.page != null ? [x.page] : []) });
+    cells.push('<div class="histcell" style="cursor:pointer" title="'+esc(x.vendor + (x.inv ? " · #"+x.inv : "") + (x.desc ? " · " + x.desc : "") + " — click to see this invoice")+'" onclick="viewOldInvoice('+refIdx+')"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(x.amount)+'</div><div class="m" style="color:var(--blue)">view ↗</div></div>');
   });
   const shown = cells.slice(-10);
   shown.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(r.amount)+'</b></div><div class="m">this bill</div></div>');
-  $("hist").innerHTML = (cells.length ? '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — each past invoice separately (click one to open it)</div>' : "")
-    + '<div class="histstrip">'+shown.join("")+'</div>';
+  let head = "";
+  if (past.length){
+    const lastAmt = past[past.length - 1].x.amount;
+    const avg = past.reduce((t, pi) => t + pi.x.amount, 0) / past.length;
+    const pct = lastAmt ? Math.round((r.amount - lastAmt) / Math.abs(lastAmt) * 100) : null;
+    head = '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — '+past.length+' earlier bill'+(past.length > 1 ? "s" : "")+' on file'
+      + (cells.length > shown.length - 1 ? ' (last '+(shown.length - 1)+' shown)' : '')
+      + '. Click one to open its invoice.'
+      + (aliases.size ? ' <span title="'+esc([...aliases].join(" · "))+'">Also billed as “'+esc([...aliases][0])+'”.</span>' : '')
+      + (sibs.length > 1 ? ' <b style="color:var(--orange)">'+sibs.length+' '+esc(r.vendor)+' lines this month'+(splitNote ? " — " + esc(splitNote) : "")+'.</b> <a href="#" onclick="toggleHistAll();return false">'+(S.histAll ? "show just this line" : "show all "+splitAll+" from this vendor")+'</a>' : '')
+      + '</div>'
+      + '<div class="small" style="margin-bottom:4px">Last time (' + moLabel(past[past.length - 1].mo.period) + '): <b>$'+fmt(lastAmt)+'</b>'
+      + (pct === null ? '' : ' · this one is <b class="'+(pct > 0 ? "delta-up" : "delta-dn")+'">'+(pct > 0 ? "+" : "")+pct+'%</b>')
+      + ' · average of the '+past.length+': <b>$'+fmt(avg)+'</b></div>';
+  } else if (!S.prior.length){
+    head = '<div class="small muted" style="margin-bottom:4px">No earlier aging is loaded for '+esc(S.M.building)+', so there is nothing to compare against yet. Add a previous month from the home screen (＋ New month) and past bills appear here automatically.</div>';
+  } else {
+    const ms = S.prior.slice(0, 4).map(mo => moLabel(mo.period)).join(", ");
+    head = '<div class="small muted" style="margin-bottom:4px">First time '+esc(r.vendor)+' appears — no bill from this vendor on the '+S.prior.length+' earlier aging'+(S.prior.length > 1 ? "s" : "")+' on file ('+esc(ms)+(S.prior.length > 4 ? ", …" : "")+'). If you expected one, check the spelling of the vendor name on the older aging.</div>';
+  }
+  $("hist").innerHTML = head + '<div class="histstrip">'+shown.join("")+'</div>';
   renderJob(r);
   const dupe = dupeMsgs(r, S.sel);
   $("dupebox").innerHTML = dupe.map(m => {
@@ -1110,7 +1302,9 @@ function renderPgLinks(){
   if (!ps.length){
     pl.innerHTML = S.ocrRunning
       ? '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line will jump to its invoice automatically — no need to link anything yet.</span>'
-      : (S.readonly ? "" : '📎 No pages linked to this line yet — flip to its backup with ◀ ▶ and click "Link page to row" (repeat if a line has several backups).');
+      : (S.readonly ? "" : '📎 No page linked to this line yet — '
+          + (S.pdfGuess ? 'showing page ' + S.pdfPageNum + ', my guess from the line above. ' : '')
+          + 'If that is the wrong invoice, flip with ◀ ▶ and click "Link page to row" (repeat if a line has several backups).');
     return;
   }
   const cur = S.pdfPageNum - 1;
@@ -1161,10 +1355,10 @@ function applyPrevDecisions(){
   let n = 0;
   S.M.rows.forEach(row => {
     if (row.status) return;
-    const iv = normInv(row.inv), k = vkey(row.vendor);
+    const iv = normInv(row.inv);
     if (!iv) return;
     for (const mo of S.prior){
-      const hit = mo.rows.find(r => normInv(r.inv) === iv && vkey(r.vendor) === k && r.amount === row.amount && r.status);
+      const hit = (mo.rows || []).find(r => normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor) && r.amount === row.amount && r.status);
       if (hit){ row.status = hit.status; row.note = hit.note; n++; break; }
     }
   });
