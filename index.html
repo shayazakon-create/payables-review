@@ -687,7 +687,7 @@ async function viewerBoot(token){
   S.M = { id: "shared", building: data.building, period: data.period, rows: (data.data && data.data.rows) || [] };
   S.M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
   S.jobs = [];
-  S.prior = [];
+  S.prior = []; S.months = [];
   S.sel = 0; S.filter = "all";
   S.sharedPdfUrl = data.pdf || null;
   $("hdrctx").textContent = data.building + " — " + moLabel(data.period) + "  ·  shared view (read-only)";
@@ -1116,6 +1116,7 @@ async function openMonth(id){
   document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
   const all = await dbAll("months");
   const bk = vkey(M.building);
+  S.months = all.map(m => ({ id: m.id, building: m.building, period: m.period, n: (m.rows || []).length }));
   S.prior = all.filter(m => m.id !== M.id && vkey(m.building) === bk && String(m.period) < String(M.period)).sort((a,b) => b.period.localeCompare(a.period));
   S._deltaCache = new Map();
   const al = await dbGet("kv", "alias|" + vkey(M.building)).catch(() => null);
@@ -1331,7 +1332,25 @@ function renderRight(){
       + (pct === null ? '' : ' · this one is <b class="'+(pct > 0 ? "delta-up" : "delta-dn")+'">'+(pct > 0 ? "+" : "")+pct+'%</b>')
       + ' · average of the '+past.length+': <b>$'+fmt(avg)+'</b></div>';
   } else if (!S.prior.length){
-    head = '<div class="small muted" style="margin-bottom:4px">No earlier aging is loaded for '+esc(S.M.building)+', so there is nothing to compare against yet. Add a previous month from the home screen (＋ New month) and past bills appear here automatically.</div>';
+    /* Nothing earlier on file. Which of the several reasons is it? Say so
+       outright rather than leaving an empty strip. */
+    const all = S.months || [];
+    const bk = vkey(S.M.building);
+    const mine = all.filter(m => vkey(m.building) === bk && m.id !== S.M.id);
+    const others = [];
+    all.forEach(m => { if (vkey(m.building) !== bk && !others.some(o => o.b === m.building)) others.push({ b: m.building, n: all.filter(x => x.building === m.building).length }); });
+    head = '<div class="small muted" style="margin-bottom:4px">Nothing earlier on file for <b>'+esc(S.M.building)+'</b> — this package is dated '+moLabel(S.M.period)+', and past bills are taken from packages dated before it.';
+    if (S.readonly){
+      head += ' This is the read-only shared view, which does not carry earlier months — open the package from your own home screen to see them.';
+    } else if (mine.length){
+      head += ' There '+(mine.length === 1 ? 'is 1 other package' : 'are ' + mine.length + ' other packages')+' for this building ('
+        + esc(mine.slice(0,4).map(m => moLabel(m.period)).join(", ")) + '), but none is dated earlier. If the date on this package is wrong, delete it from the home screen and re-import with the right date.';
+    } else {
+      head += ' No other package for this building has been imported yet.';
+      if (others.length) head += ' Buildings you do have: ' + esc(others.slice(0,5).map(o => o.b + " (" + o.n + ")").join(", ")) + '. If one of those is this same building under a different name, re-import under the same name and the history lines up.';
+      else head += ' Add last month\'s package from the home screen (＋ New month) and past bills appear here automatically.';
+    }
+    head += '</div>';
   } else {
     const ms = S.prior.slice(0, 4).map(mo => moLabel(mo.period)).join(", ");
     /* Probably the same vendor under a different name? Offer to link them. */
