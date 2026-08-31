@@ -355,15 +355,41 @@ function vkey(name){ return vkeyFull(name).slice(0,14); }
    match "Bellwood Roofing" — the split has to fall on a word boundary. */
 const _VSTOP = { inc:1, incorporated:1, ltd:1, ltee:1, limited:1, llc:1, llp:1, lp:1,
                  corp:1, corporation:1, co:1, company:1, the:1, plc:1, ulc:1, "&":1, and:1 };
+/* Agings abbreviate: "GLENLUM PROP MGMT" one month, "Glenlum Property
+   Management" the next. Expand the common short forms before comparing. */
+const _VABBR = { mgmt:"management", mgt:"management", mngmt:"management", mgnt:"management",
+  prop:"property", props:"property", properties:"property", ppty:"property",
+  svc:"service", svcs:"service", services:"service", serv:"service", servs:"service",
+  bldg:"building", bldgs:"building", dept:"department", mtce:"maintenance", maint:"maintenance",
+  constr:"construction", constn:"construction", elec:"electric", electrical:"electric",
+  electricity:"electric", mech:"mechanical", assoc:"associates", assocs:"associates",
+  intl:"international", natl:"national", ctr:"centre", cntr:"centre", center:"centre",
+  hldgs:"holdings", mfg:"manufacturing", engr:"engineering", eng:"engineering",
+  plmb:"plumbing", htg:"heating", ins:"insurance", grp:"group", mgmnt:"management" };
 const _vtCache = new Map();
 function vtokens(name){
   const s = String(name == null ? "" : name);
   let t = _vtCache.get(s);
   if (t === undefined){
-    t = s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !_VSTOP[w]);
+    t = s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !_VSTOP[w]).map(w => _VABBR[w] || w);
     _vtCache.set(s, t);
   }
   return t;
+}
+/* One word against another: exact, a shortening ("prop" / "property"), or a
+   consonant squeeze ("mgmt" / "management" - every letter in order, no vowels
+   after the first). Deliberately NOT used on a vendor's first word, so "Bell"
+   never swallows "Bellwood". */
+function tokEq(a, b){
+  if (a === b) return true;
+  const sh = a.length <= b.length ? a : b, lo = a.length <= b.length ? b : a;
+  if (sh.length >= 3 && lo.indexOf(sh) === 0) return true;
+  if (sh.length >= 3 && lo.length >= sh.length + 2 && sh[0] === lo[0] && !/[aeiou]/.test(sh.slice(1))){
+    let i = 0;
+    for (let j = 0; j < lo.length && i < sh.length; j++) if (lo[j] === sh[i]) i++;
+    if (i === sh.length) return true;
+  }
+  return false;
 }
 /* When one vendor bills several lines a month (two Bell accounts, gas + water
    from one utility), the vendor name alone can't tell them apart. lineSig()
@@ -383,18 +409,48 @@ function lineSig(r){
   const d = vtokens(r.desc).slice(0, 3).join("");
   return d.length >= 4 ? "d:" + d : "";
 }
+/* names you have linked by hand win over any guessing */
+function vcanon(name){ const k = vkeyFull(name); return (S.alias && S.alias[k]) || k; }
 function sameVendor(a, b){
   const x = vkeyFull(a), y = vkeyFull(b);
   if (!x || !y) return false;
   if (x === y) return true;
+  const ca = vcanon(a), cb = vcanon(b);
+  if (ca === cb) return true;
   if (x.slice(0,14) === y.slice(0,14)) return true;
   const shortS = x.length <= y.length ? x : y, longS = x.length <= y.length ? y : x;
   if (shortS.length >= 5 && longS.indexOf(shortS) === 0) return true;
   const ta = vtokens(a), tb = vtokens(b);
   if (!ta.length || !tb.length) return false;
   const st = ta.length <= tb.length ? ta : tb, lt = ta.length <= tb.length ? tb : ta;
-  for (let i = 0; i < st.length; i++) if (st[i] !== lt[i]) return false;
+  if (st[0] !== lt[0]) return false;               // first word must match outright
+  for (let i = 1; i < st.length; i++) if (!tokEq(st[i], lt[i])) return false;
   return st.length >= 2 || st[0].length >= 4;
+}
+/* how close two vendor names look, for "did you mean" suggestions */
+function vendorSimilar(a, b){
+  const ta = vtokens(a), tb = vtokens(b);
+  if (!ta.length || !tb.length) return 0;
+  let shared = 0;
+  ta.forEach(t => { if (tb.some(u => tokEq(t, u))) shared++; });
+  let sc = shared / Math.max(ta.length, tb.length);
+  const A = vkeyFull(a), B = vkeyFull(b);
+  let i = 0; while (i < A.length && i < B.length && A[i] === B[i]) i++;
+  return Math.max(sc, i / Math.max(A.length, B.length));
+}
+async function linkVendorAlias(i){
+  const other = (S._aliasSug || [])[i];
+  if (!other || S.readonly) return;
+  const me = vkeyFull(S.M.rows[S.sel].vendor), them = vkeyFull(other);
+  if (!S.alias) S.alias = {};
+  const canon = S.alias[me] || me, oldTheirs = S.alias[them] || them;
+  Object.keys(S.alias).forEach(k => { if (S.alias[k] === oldTheirs) S.alias[k] = canon; });
+  S.alias[them] = canon; S.alias[me] = canon;
+  try{ await dbPut("kv", { k: "alias|" + vkey(S.M.building), v: S.alias }); }
+  catch(e){ toast("Couldn't save that link — check your connection."); }
+  S._deltaCache = new Map();
+  toast("Linked “" + other + "” to “" + S.M.rows[S.sel].vendor + "” for this building.");
+  renderTable(); renderRight();
 }
 function normInv(inv){ const s=String(inv||"").toLowerCase().replace(/[^a-z0-9]/g,""); return s.length>=3 ? s : ""; }
 function moLabel(period){
@@ -1062,6 +1118,8 @@ async function openMonth(id){
   const bk = vkey(M.building);
   S.prior = all.filter(m => m.id !== M.id && vkey(m.building) === bk && String(m.period) < String(M.period)).sort((a,b) => b.period.localeCompare(a.period));
   S._deltaCache = new Map();
+  const al = await dbGet("kv", "alias|" + vkey(M.building)).catch(() => null);
+  S.alias = (al && al.v) || {};
   await loadJobs(M.building);
   autoAssignJobs();
   $("hdrctx").textContent = M.building + " — " + moLabel(M.period);
@@ -1164,29 +1222,28 @@ function selectRow(i){
   renderTable(); renderRight();
   const r = S.M.rows[i];
   if (S.pdf){
-    let pg = (r.pages && r.pages.length) ? r.pages[0] : null;
-    S.pdfGuess = false;
-    /* No page linked to this line: the backup PDF is normally in the same order
-       as the aging, so step forward one page per unlinked line instead of
-       parking on the previous line's invoice (which showed Bell's bill when
-       you clicked the line under it). */
+    const pg = (r.pages && r.pages.length) ? r.pages[0] : null;
+    /* Only move the invoice view when this line actually has a page linked.
+       Plenty of lines have no invoice of their own (payroll, for one), and
+       jumping them to a neighbour's page just shows the wrong bill. When
+       nothing is linked the view stays put and offers a guess instead. */
+    S.pdfGuess = null;
     if (pg == null){
+      let g = null;
       for (let j = i - 1; j >= 0; j--){
         const pj = S.M.rows[j].pages;
-        if (pj && pj.length){ pg = pj[pj.length - 1] + (i - j); break; }
+        if (pj && pj.length){ g = pj[pj.length - 1] + (i - j); break; }
       }
-      if (pg == null){
+      if (g == null){
         for (let j = i + 1; j < S.M.rows.length; j++){
           const pj = S.M.rows[j].pages;
-          if (pj && pj.length){ pg = pj[0] - (j - i); break; }
+          if (pj && pj.length){ g = pj[0] - (j - i); break; }
         }
       }
-      if (pg != null){
-        pg = Math.max(0, Math.min(pg, (S.pdfPages || 1) - 1));
-        S.pdfGuess = true;
-      }
+      if (g != null && g >= 0 && g < (S.pdfPages || 0)) S.pdfGuess = g;
+    } else if (pg + 1 !== S.pdfPageNum){
+      S.pdfPageNum = pg + 1; renderPdf();
     }
-    if (pg != null && pg + 1 !== S.pdfPageNum){ S.pdfPageNum = pg + 1; renderPdf(); }
     renderPgLinks();
   }
   const tr = document.querySelector("#revbody tr.sel");
@@ -1277,7 +1334,20 @@ function renderRight(){
     head = '<div class="small muted" style="margin-bottom:4px">No earlier aging is loaded for '+esc(S.M.building)+', so there is nothing to compare against yet. Add a previous month from the home screen (＋ New month) and past bills appear here automatically.</div>';
   } else {
     const ms = S.prior.slice(0, 4).map(mo => moLabel(mo.period)).join(", ");
-    head = '<div class="small muted" style="margin-bottom:4px">First time '+esc(r.vendor)+' appears — no bill from this vendor on the '+S.prior.length+' earlier aging'+(S.prior.length > 1 ? "s" : "")+' on file ('+esc(ms)+(S.prior.length > 4 ? ", …" : "")+'). If you expected one, check the spelling of the vendor name on the older aging.</div>';
+    /* Probably the same vendor under a different name? Offer to link them. */
+    const cand = new Map();
+    S.prior.forEach(mo => (mo.rows || []).forEach(x => {
+      if (!x.vendor || sameVendor(x.vendor, r.vendor)) return;
+      const sc = vendorSimilar(x.vendor, r.vendor);
+      if (sc >= 0.4 && (!cand.has(x.vendor) || cand.get(x.vendor) < sc)) cand.set(x.vendor, sc);
+    }));
+    S._aliasSug = [...cand.entries()].sort((a,b) => b[1] - a[1]).slice(0, 3).map(e => e[0]);
+    head = '<div class="small muted" style="margin-bottom:4px">First time '+esc(r.vendor)+' appears — no bill from this vendor on the '+S.prior.length+' earlier aging'+(S.prior.length > 1 ? "s" : "")+' on file ('+esc(ms)+(S.prior.length > 4 ? ", …" : "")+').</div>'
+      + (S._aliasSug.length && !S.readonly
+          ? '<div class="small" style="margin-bottom:4px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:6px 10px">Did you bill this one under a different name? '
+            + S._aliasSug.map((v, j) => '<a href="#" onclick="linkVendorAlias('+j+');return false" title="Treat these as the same vendor from now on">'+esc(v)+'</a>').join(" · ")
+            + ' <span class="muted">— click to link them for this building.</span></div>'
+          : '<div class="small muted" style="margin-bottom:4px">If you expected one, check the spelling of the vendor name on the older aging.</div>');
   }
   $("hist").innerHTML = head + '<div class="histstrip">'+shown.join("")+'</div>';
   renderJob(r);
@@ -1302,9 +1372,9 @@ function renderPgLinks(){
   if (!ps.length){
     pl.innerHTML = S.ocrRunning
       ? '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line will jump to its invoice automatically — no need to link anything yet.</span>'
-      : (S.readonly ? "" : '📎 No page linked to this line yet — '
-          + (S.pdfGuess ? 'showing page ' + S.pdfPageNum + ', my guess from the line above. ' : '')
-          + 'If that is the wrong invoice, flip with ◀ ▶ and click "Link page to row" (repeat if a line has several backups).');
+      : (S.readonly ? "" : '📎 No page linked to this line — the invoice stayed on page ' + S.pdfPageNum + ' so you don\'t land on the wrong bill. '
+          + (S.pdfGuess != null ? '<button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')">Try page ' + (S.pdfGuess + 1) + '</button> ' : '')
+          + 'Flip with ◀ ▶ and click "Link page to row" (repeat if a line has several backups). Some lines — payroll, for instance — have no invoice at all; just leave those unlinked.');
     return;
   }
   const cur = S.pdfPageNum - 1;
@@ -1671,7 +1741,7 @@ function linkPage(){
   const p = S.pdfPageNum - 1;
   const ix = r.pages.indexOf(p);
   if (ix >= 0){ r.pages.splice(ix, 1); toast("Page " + S.pdfPageNum + " unlinked from " + r.vendor); }
-  else { r.pages.push(p); r.pages.sort((a, b) => a - b); toast("Page " + S.pdfPageNum + " linked to " + r.vendor + (r.pages.length > 1 ? " (" + r.pages.length + " pages)" : "")); }
+  else { r.pages.push(p); r.pages.sort((a, b) => a - b); r.pageManual = true; toast("Page " + S.pdfPageNum + " linked to " + r.vendor + (r.pages.length > 1 ? " (" + r.pages.length + " pages)" : "")); }
   r.page = r.pages.length ? r.pages[0] : null;
   saveSoon(); renderPdf(); renderRight();
 }
@@ -1721,6 +1791,9 @@ async function runOcr(){
       return toast("Auto-match failed: " + err.message);
     }
   }
+  /* Drop the links this matcher made last time so a re-run can correct them;
+     anything linked by hand stays. */
+  S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
   const n = autoMatch(S.M.rows, texts, S.M.summaryPage);
   saveSoon(); renderPdf(); renderTable();
   $("ocrbar").textContent = "";
@@ -1729,32 +1802,57 @@ async function runOcr(){
   toast("Matched " + n + " of " + S.M.rows.length + " lines to PDF pages. Use 📎 to fix any that are off.");
   selectRow(S.sel);
 }
+/* Pick the page to use out of the pages that matched: one nobody has taken,
+   preferring the first at or after where the last line landed, since backup
+   PDFs run in the same order as the aging. */
+function pickPage(hits, claimed, last){
+  const free = hits.filter(p => !claimed.has(p));
+  const fwd = free.filter(p => p >= last);
+  if (fwd.length) return fwd[0];
+  if (free.length) return free[0];
+  return null;
+}
 function autoMatch(rows, texts, skip){
-  const norm = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
+  const sq = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
+  const sp = texts.map(t => " " + (t || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
   let last = 0, n = 0;
   const claimed = new Set();
   rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); r.pages.forEach(p => claimed.add(p)); });
   rows.forEach(r => {
     if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
     const iv = normInv(r.inv);
-    if (iv.length >= 4){
-      const hits = [];
-      for (let p = 0; p < norm.length; p++){ if (p !== skip && norm[p].includes(iv)) hits.push(p); }
-      if (hits.length){
-        r.pages = hits; r.page = hits[0];
-        hits.forEach(p => claimed.add(p));
-        last = hits[hits.length - 1]; n++;
-        return;
+    const digits = String(r.inv || "").replace(/\D/g, "");
+    /* Match the invoice number as a whole word. The old code looked for it as
+       a bare substring of the page with every separator stripped, so a short
+       number turned up inside an account number or a total on an unrelated
+       page and the line was linked to somebody else's invoice. */
+    const needles = [];
+    if (iv.length >= 4) needles.push(iv);
+    if (digits.length >= 4 && digits !== iv) needles.push(digits);
+    let hits = [];
+    if (needles.length){
+      for (let q = 0; q < sp.length; q++){
+        if (q === skip) continue;
+        if (needles.some(nd => sp[q].indexOf(" " + nd + " ") >= 0)) hits.push(q);
+      }
+      if (!hits.length && iv.length >= 6){           // long numbers only, as a fallback
+        for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(iv)) hits.push(q); }
       }
     }
-    const k = Math.abs(r.amount).toFixed(2);
-    let found = null;
-    for (let off = 0; off < norm.length; off++){
-      const p = (last + off) % norm.length;
-      if (p === skip || claimed.has(p)) continue;
-      if (norm[p].includes(k)){ found = p; break; }
+    let chosen = pickPage(hits, claimed, last);
+    if (chosen == null){
+      const k = Math.abs(r.amount).toFixed(2);
+      hits = [];
+      for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(k)) hits.push(q); }
+      chosen = pickPage(hits, claimed, last);
     }
-    if (found !== null){ r.pages = [found]; r.page = found; claimed.add(found); last = found; n++; }
+    if (chosen != null){
+      const pages = [chosen];                        // carry on over a multi-page invoice
+      for (let q = chosen + 1; hits.indexOf(q) >= 0 && !claimed.has(q); q++) pages.push(q);
+      r.pages = pages; r.page = pages[0];
+      pages.forEach(q => claimed.add(q));
+      last = pages[pages.length - 1]; n++;
+    }
   });
   return n;
 }
