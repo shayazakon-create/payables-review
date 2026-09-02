@@ -1421,7 +1421,8 @@ function renderPgLinks(){
   const pos = ps.indexOf(cur);
   pl.innerHTML = '📎 <b style="color:var(--tx)">' + ps.length + ' backup' + (ps.length > 1 ? "s" : "") + '</b> for this line'
     + (ps.length > 1 ? (pos >= 0 ? ' — viewing ' + (pos + 1) + ' of ' + ps.length : ' — click to view each') : '')
-    + ': ' + ps.map((p, j) => '<button style="padding:1px 9px;font-size:12px;margin-right:4px;' + (p === cur ? 'border-color:var(--blue);color:var(--blue);font-weight:600;background:var(--blue-bg);' : '') + '" onclick="gotoPage(' + p + ')" title="Go to PDF page ' + (p + 1) + '">' + (j + 1) + '</button>').join("");
+    + ': ' + ps.map((p, j) => '<button style="padding:1px 9px;font-size:12px;margin-right:4px;' + (p === cur ? 'border-color:var(--blue);color:var(--blue);font-weight:600;background:var(--blue-bg);' : '') + '" onclick="gotoPage(' + p + ')" title="Go to PDF page ' + (p + 1) + '">' + (j + 1) + '</button>').join("")
+    + (S.readonly ? "" : ' <button style="padding:1px 9px;font-size:12px" onclick="clearPageLinks()" title="Forget these pages for this line and go back to guessing">✕ wrong page</button>');
 }
 function priorInvoicesHtml(k){
   const items = [];
@@ -1695,8 +1696,16 @@ async function loadPdf(id){
       S.ocrAuto[id] = 1;
       toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
       runOcr();
-    } else if (rec.ocr && S.M.rows.some(r => !r.pages || !r.pages.length)){
-      autoMatch(S.M.rows, rec.ocr, S.M.summaryPage); saveSoon();
+    } else if (rec.ocr){
+      if (S.M.matchVer !== MATCH_VER && !S.readonly){
+        S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
+        const k = autoMatch(S.M.rows, rec.ocr, S.M.summaryPage);
+        S.M.matchVer = MATCH_VER;
+        saveSoon(); renderTable();
+        toast("Re-linked the invoice pages (" + k + " of " + S.M.rows.length + ") — page matching has been corrected since this package was read.");
+      } else if (S.M.rows.some(r => !r.pages || !r.pages.length)){
+        autoMatch(S.M.rows, rec.ocr, S.M.summaryPage); saveSoon();
+      }
     }
   } catch(err){
     toast("Couldn't open the PDF: " + err.message);
@@ -1798,6 +1807,14 @@ function linkPage(){
   r.page = r.pages.length ? r.pages[0] : null;
   saveSoon(); renderPdf(); renderRight();
 }
+function clearPageLinks(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.pages = []; r.page = null; r.pageManual = false;
+  saveSoon(); renderTable(); renderRight(); selectRow(S.sel);
+  toast("Cleared the pages linked to " + r.vendor + ".");
+}
 function gotoPage(p){
   if (!S.pdf) return;
   S.pdfPageNum = p + 1;
@@ -1848,6 +1865,7 @@ async function runOcr(){
      anything linked by hand stays. */
   S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
   const n = autoMatch(S.M.rows, texts, S.M.summaryPage);
+  S.M.matchVer = MATCH_VER;
   saveSoon(); renderPdf(); renderTable();
   $("ocrbar").textContent = "";
   $("btnOcr").disabled = false;
@@ -1858,6 +1876,10 @@ async function runOcr(){
 /* Pick the page to use out of the pages that matched: one nobody has taken,
    preferring the first at or after where the last line landed, since backup
    PDFs run in the same order as the aging. */
+/* Bumped whenever autoMatch changes. Links carry the version that made them,
+   so a package linked by an older, buggier matcher is rebuilt on open instead
+   of keeping wrong pages until someone thinks to press Auto-match. */
+const MATCH_VER = 3;
 function pickPage(hits, claimed, last){
   const free = hits.filter(p => !claimed.has(p));
   const fwd = free.filter(p => p >= last);
