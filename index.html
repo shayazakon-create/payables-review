@@ -614,7 +614,7 @@ const S = {
   pdf: null,        // pdfjs document
   pdfPageNum: 1, pdfPages: 0, zoom: 1, fitScale: 1,
   imp: { grid: null, hdr: -1, skip: 1, map: null, rows: [], pdfFile: null, xlsxName: "" },
-  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [], histAll: false, pdfGuess: false,
+  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [], histAll: false, pdfGuess: null, hasOcr: false,
 };
 
 function show(scr){
@@ -1245,6 +1245,10 @@ function selectRow(i){
           if (pj && pj.length){ g = pj[0] - (j - i); break; }
         }
       }
+      /* Nothing anywhere to anchor to (auto-match has not run, or matched
+         nothing): a backup PDF is normally assembled in aging order, so the
+         line's own position is the best guess available. */
+      if (g == null && !S.M.rows.some(x => x.pages && x.pages.length)) g = i;
       if (g != null && g >= 0 && g < (S.pdfPages || 0)) S.pdfGuess = g;
     } else if (pg + 1 !== S.pdfPageNum){
       S.pdfPageNum = pg + 1; renderPdf();
@@ -1393,11 +1397,22 @@ function renderPgLinks(){
   if (!r || !S.pdf){ pl.innerHTML = ""; return; }
   const ps = r.pages || [];
   if (!ps.length){
-    pl.innerHTML = S.ocrRunning
-      ? '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line will jump to its invoice automatically — no need to link anything yet.</span>'
-      : (S.readonly ? "" : '📎 No page linked to this line — the invoice stayed on page ' + S.pdfPageNum + ' so you don\'t land on the wrong bill. '
-          + (S.pdfGuess != null ? '<button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')">Try page ' + (S.pdfGuess + 1) + '</button> ' : '')
-          + 'Flip with ◀ ▶ and click "Link page to row" (repeat if a line has several backups). Some lines — payroll, for instance — have no invoice at all; just leave those unlinked.');
+    const linked = S.M.rows.filter(x => x.pages && x.pages.length).length;
+    const tryBtn = S.pdfGuess != null
+      ? '<button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')">Try page ' + (S.pdfGuess + 1) + '</button> '
+      : '';
+    let msg;
+    if (S.ocrRunning){
+      msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line jumps to its invoice on its own — nothing to link yet.</span>';
+    } else if (!S.hasOcr){
+      msg = '📎 This backup PDF has not been read yet, so no line knows its page. Click <b>✨ Auto-match pages</b> above the invoice to read it once and link them. ' + tryBtn;
+    } else if (!linked){
+      msg = '📎 Auto-match read the PDF but could not place any line — usually the invoice numbers and amounts on the pages do not match the aging. Link them by hand: flip with ◀ ▶ and click "Link page to row". ' + tryBtn;
+    } else {
+      msg = '📎 No page linked to this line (auto-match placed ' + linked + ' of ' + S.M.rows.length + '). The invoice stayed on page ' + S.pdfPageNum + ' rather than showing you the wrong bill. ' + tryBtn
+        + 'Flip with ◀ ▶ and click "Link page to row" if you want it remembered. Some lines — payroll, for instance — have no invoice at all; leave those unlinked.';
+    }
+    pl.innerHTML = S.readonly ? "" : msg;
     return;
   }
   const cur = S.pdfPageNum - 1;
@@ -1673,6 +1688,7 @@ async function loadPdf(id){
     const first = S.M.rows[S.sel];
     if (first && first.pages && first.pages.length) S.pdfPageNum = first.pages[0] + 1;
     pdfFit();
+    S.hasOcr = !!rec.ocr;
     if (!rec.ocr && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
       S.ocrAuto[id] = 1;
       toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
