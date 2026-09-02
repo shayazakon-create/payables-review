@@ -1868,12 +1868,30 @@ function pickPage(hits, claimed, last){
 function autoMatch(rows, texts, skip){
   const sq = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
   const sp = texts.map(t => " " + (t || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
+  /* amounts as whole numbers, so 113.07 is not found inside 2113.07 */
+  const nm = texts.map(t => " " + (t || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
   let last = 0, n = 0;
   const claimed = new Set();
-  rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); r.pages.forEach(p => claimed.add(p)); });
+  const byInv = new Map();
+  rows.forEach(r => {
+    if (!r.pages) r.pages = (r.page != null ? [r.page] : []);
+    r.pages.forEach(p => claimed.add(p));
+    const iv0 = normInv(r.inv);
+    if (iv0 && r.pages.length) byInv.set(iv0, r.pages.slice());
+  });
   rows.forEach(r => {
     if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
     const iv = normInv(r.inv);
+    /* One invoice split across several aging lines (two Amazon lines on one
+       invoice, say) is one piece of backup. Without this the second line finds
+       its page already claimed, falls through to matching on amount, and lands
+       on somebody else's invoice. */
+    if (iv && byInv.has(iv)){
+      r.pages = byInv.get(iv).slice();
+      r.page = r.pages[0];
+      last = r.pages[r.pages.length - 1]; n++;
+      return;
+    }
     const digits = String(r.inv || "").replace(/\D/g, "");
     /* Match the invoice number as a whole word. The old code looked for it as
        a bare substring of the page with every separator stripped, so a short
@@ -1896,14 +1914,20 @@ function autoMatch(rows, texts, skip){
     if (chosen == null){
       const k = Math.abs(r.amount).toFixed(2);
       hits = [];
-      for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(k)) hits.push(q); }
+      for (let q = 0; q < nm.length; q++){ if (q !== skip && nm[q].indexOf(" " + k + " ") >= 0) hits.push(q); }
       chosen = pickPage(hits, claimed, last);
+      if (chosen == null){                           // looser, as a last resort
+        hits = [];
+        for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(k)) hits.push(q); }
+        chosen = pickPage(hits, claimed, last);
+      }
     }
     if (chosen != null){
       const pages = [chosen];                        // carry on over a multi-page invoice
       for (let q = chosen + 1; hits.indexOf(q) >= 0 && !claimed.has(q); q++) pages.push(q);
       r.pages = pages; r.page = pages[0];
       pages.forEach(q => claimed.add(q));
+      if (iv) byInv.set(iv, pages.slice());
       last = pages[pages.length - 1]; n++;
     }
   });
