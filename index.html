@@ -772,7 +772,15 @@ async function goHome(){
         const done = mo.rows.filter(r => r.status).length, q = mo.rows.filter(r => r.status === "question").length, h = mo.rows.filter(r => r.status === "hold").length;
         const tot = mo.rows.reduce((s,r) => s + r.amount, 0);
         html += '<div class="monthcard" onclick="openMonth(\''+mo.id+'\')">'
-          + '<div><b>'+moLabel(mo.period)+'</b><div class="small muted">'+mo.rows.length+' invoices · $'+fmt(tot)
+          + '<div><b>'+moLabel(mo.period)+'</b>'
+          + '<div class="small muted">'
+          /* The heading is the aging's own "as of" date, so a package worked on
+             today can sit under last month's heading and look lost. Say where it
+             came from and when it was added. */
+          + (mo.xlsxName ? esc(mo.xlsxName) + ' · ' : '')
+          + (mo.savedAt ? 'added ' + new Date(mo.savedAt).toLocaleString("en-US",{month:"short",day:"numeric"}) : '')
+          + '</div>'
+          + '<div class="small muted">'+mo.rows.length+' invoices · $'+fmt(tot)
           + (q ? ' · <span style="color:var(--red)">'+q+' question'+(q>1?'s':'')+'</span>' : '')
           + (h ? ' · <span style="color:var(--orange)">'+h+' on hold</span>' : '') + '</div></div>'
           + '<div style="display:flex;align-items:center;gap:12px"><span class="small muted">'+done+'/'+mo.rows.length+' reviewed</span>'
