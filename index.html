@@ -1258,6 +1258,12 @@ function selectRow(i){
          line's own position is the best guess available. */
       if (g == null && !S.M.rows.some(x => x.pages && x.pages.length)) g = i;
       if (g != null && g >= 0 && g < (S.pdfPages || 0)) S.pdfGuess = g;
+      /* Follow the guess rather than sitting on whatever page was showing.
+         Landing near the right invoice and saying so beats leaving the
+         reviewer on page 1 of a 58-invoice package with no way forward. */
+      if (S.pdfGuess != null && S.pdfGuess + 1 !== S.pdfPageNum){
+        S.pdfPageNum = S.pdfGuess + 1; renderPdf();
+      }
     } else if (pg + 1 !== S.pdfPageNum){
       S.pdfPageNum = pg + 1; renderPdf();
     }
@@ -1405,21 +1411,9 @@ function renderPgLinks(){
   if (!r || !S.pdf){ pl.innerHTML = ""; return; }
   const ps = r.pages || [];
   if (!ps.length){
-    const linked = S.M.rows.filter(x => x.pages && x.pages.length).length;
-    const tryBtn = S.pdfGuess != null
-      ? '<button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')">Try page ' + (S.pdfGuess + 1) + '</button> '
-      : '';
-    let msg;
-    if (S.ocrRunning){
-      msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below). When it finishes, each line jumps to its invoice on its own — nothing to link yet.</span>';
-    } else if (!S.hasOcr){
-      msg = '📎 This backup PDF has not been read yet, so no line knows its page. Click <b>✨ Auto-match pages</b> above the invoice to read it once and link them. ' + tryBtn;
-    } else if (!linked){
-      msg = '📎 Auto-match read the PDF but could not place any line — usually the invoice numbers and amounts on the pages do not match the aging. Link them by hand: flip with ◀ ▶ and click "Link page to row". ' + tryBtn;
-    } else {
-      msg = '📎 No page linked to this line (auto-match placed ' + linked + ' of ' + S.M.rows.length + '). The invoice stayed on page ' + S.pdfPageNum + ' rather than showing you the wrong bill. ' + tryBtn
-        + 'Flip with ◀ ▶ and click "Link page to row" if you want it remembered. Some lines — payroll, for instance — have no invoice at all; leave those unlinked.';
-    }
+    let msg = '📎 <b>Guessing page ' + S.pdfPageNum + '</b> for this line — not linked yet. If it is the right invoice, click <b>📎 Link page to row</b> and it is remembered. If not, flip with ◀ ▶ and link it there.';
+    if (S.ocrRunning) msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below) — pages will link themselves when it finishes. Guessing meanwhile.</span>';
+    else if (!S.hasOcr) msg += ' <button style="padding:1px 9px;font-size:12px" onclick="runOcr()">✨ Read the PDF and link them all</button>';
     pl.innerHTML = S.readonly ? "" : msg;
     return;
   }
