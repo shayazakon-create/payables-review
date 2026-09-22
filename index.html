@@ -1917,7 +1917,7 @@ async function runOcr(){
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 4;
+const MATCH_VER = 5;
 /* The page's words, squashed the same way vendor names are (legal suffixes
    dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
    on the aging and on its invoice. */
@@ -1930,26 +1930,46 @@ function pageWords(t){
 }
 /* How much of the vendor's name is on the page, 0 to 1. The first word has to
    be there: "Crescent Centre Plumbing" must not count a page whose only word
-   in common is "centre". */
+   in common is "centre". The first word counts however short it is — dropping
+   it for being under three letters left "TK Elevator" matching in full on any
+   page with the word "elevator", so the TK line landed on an Amazon invoice
+   for elevator supplies. */
 function vendorHit(vt, words){
-  if (!words.size) return 0;
-  const sig = vt.filter(t => t.length >= 3);
-  if (!sig.length || !words.has(sig[0])) return 0;
+  if (!vt.length || !words.size || !words.has(vt[0])) return 0;
+  const sig = vt.filter((t, i) => i === 0 || t.length >= 3);
   let hit = 0;
   sig.forEach(t => { if (words.has(t)) hit++; });
+  /* a one- or two-letter name with nothing after it is too thin to link on */
+  if (sig.length === 1 && vt[0].length < 3) return 0.5;
   return hit / sig.length;
 }
-/* Everything about one aging line that might be printed on its invoice. */
+/* Everything about one aging line that might be printed on its invoice.
+   `inv` holds forms of the complete number, `invAlt` the leading piece of a
+   number the aging has stapled something onto — worth less, since it is a
+   guess at where the number stops. */
 function rowNeedles(r){
-  const iv = normInv(r.inv);
-  const digits = String(r.inv || "").replace(/\D/g, "");
-  const inv = [];
-  if (iv.length >= 4) inv.push(iv);
-  if (digits.length >= 4 && digits !== iv) inv.push(digits);
+  const raw = String(r.inv || "").trim();
+  const iv = normInv(raw);
+  const inv = [], invAlt = [];
+  const add = (arr, v) => {
+    const t = String(v).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (t.length >= 4 && inv.indexOf(t) < 0 && invAlt.indexOf(t) < 0) arr.push(t);
+  };
+  add(inv, iv);
   /* Accounting systems pad: "INV-0004821" on the aging prints as "4821". */
-  const bare = digits.replace(/^0+/, "");
-  if (bare.length >= 4 && inv.indexOf(bare) < 0) inv.push(bare);
-  return { iv, inv, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor) };
+  const digits = raw.replace(/\D/g, "");
+  add(inv, digits);
+  add(inv, digits.replace(/^0+/, ""));
+  /* And they staple things on: "148252-09/09/2026" is invoice 148252, billed
+     on the 9th. Squashed whole it is a 14-digit number that appears on no
+     page at all, so without the leading piece the strongest signal a line has
+     is silently lost and it falls back to matching on the amount — which is
+     how a line landed on somebody else's invoice that happened to carry the
+     same figure. Only the leading piece, since the number comes first, and
+     never a bare year, which would match every page in the package. */
+  const parts = raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (parts.length > 1 && !/^(19|20)\d\d$/.test(parts[0])) add(invAlt, parts[0]);
+  return { iv, inv, invAlt, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor) };
 }
 /* A line and a page are scored on the three things an invoice shows: its
    number, its total, and whose invoice it is. Matching on the number or the
@@ -1999,37 +2019,13 @@ function autoMatch(rows, texts, skip){
   const need = new Map();
   open.forEach(i => need.set(i, rowNeedles(rows[i])));
 
-  const invHit = (nd, q) => nd.inv.some(x => sp[q].indexOf(" " + x + " ") >= 0);
-  const scoreAt = (nd, q) => {
-    if (q === skip || claimed.has(q)) return 0;
-    let s = 0;
-    /* Match the invoice number as a whole word. The old code looked for it as
-       a bare substring of the page with every separator stripped, so a short
-       number turned up inside an account number or a total on an unrelated
-       page and the line was linked to somebody else's invoice. */
-    if (invHit(nd, q)) s += 6;
-    else if (nd.iv.length >= 6 && sq[q].includes(nd.iv)) s += 5;   // long numbers only
-    if (nm[q].indexOf(" " + nd.amt + " ") >= 0) s += 4;
-    else if (sq[q].includes(nd.amt)) s += 2;                       // looser, as a nudge
-    return s + vendorHit(nd.vt, pw[q]) * 5;
-  };
+  /* Match the invoice number as a whole word. The old code looked for it as
+     a bare substring of the page with every separator stripped, so a short
+     number turned up inside an account number or a total on an unrelated
+     page and the line was linked to somebody else's invoice. */
+  const onPage = (list, q) => list.some(x => sp[q].indexOf(" " + x + " ") >= 0);
+  const invHit = (nd, q) => onPage(nd.inv, q);
 
-  /* Which line each page looks most like, so no line walks off with a page
-     another line matches better. */
-  const cand = new Map();
-  const top = new Array(N).fill(0), topRow = new Array(N).fill(-1), tied = new Array(N).fill(false);
-  open.forEach(i => {
-    const nd = need.get(i), list = [];
-    for (let q = 0; q < N; q++){
-      const s = scoreAt(nd, q);
-      if (s < MATCH_MIN) continue;
-      list.push({ p: q, s });
-      if (s > top[q]){ top[q] = s; topRow[q] = i; tied[q] = false; }
-      else if (s === top[q]) tied[q] = true;
-    }
-    list.sort((a, b) => b.s - a.s || a.p - b.p);
-    cand.set(i, list);
-  });
   /* Pages carrying some line's invoice number: where one invoice ends and the
      next begins, so a multi-page invoice does not swallow the one after it. */
   const invOwner = new Array(N).fill(-1);
@@ -2037,6 +2033,57 @@ function autoMatch(rows, texts, skip){
     const nd = need.get(i);
     if (!nd.inv.length) return;
     for (let q = 0; q < N; q++){ if (q !== skip && invHit(nd, q)) invOwner[q] = invOwner[q] === -1 ? i : -2; }
+  });
+  /* How much of each line's vendor is on each page, worked out up front so a
+     page can also be asked whether it announces somebody else. */
+  const vhm = open.map(i => {
+    const vt = need.get(i).vt, row = new Float64Array(N);
+    for (let q = 0; q < N; q++) row[q] = vendorHit(vt, pw[q]);
+    return row;
+  });
+  const named = new Uint8Array(N);
+  vhm.forEach(row => { for (let q = 0; q < N; q++) if (row[q] >= 0.8) named[q] = 1; });
+
+  const scoreAt = (k, i, q) => {
+    if (q === skip || claimed.has(q)) return 0;
+    const nd = need.get(i);
+    const vh = vhm[k][q];
+    let s = 0;
+    if (invHit(nd, q)) s += 6;
+    else if (onPage(nd.invAlt, q)) s += 5;                         // a stapled-on number
+    else if (nd.iv.length >= 6 && sq[q].includes(nd.iv)) s += 5;   // long numbers only
+    const amtExact = nm[q].indexOf(" " + nd.amt + " ") >= 0;
+    if (amtExact) s += 4;
+    else if (sq[q].includes(nd.amt)) s += 2;                       // looser, as a nudge
+    /* An amount on its own is the weakest thing we match on — aging amounts
+       are open balances, and in a package of sixty invoices two totals
+       colliding is ordinary. So it is not enough on a page that plainly
+       belongs to someone else: one that names another line's vendor in full,
+       or carries another line's invoice number. Those lines stay unlinked and
+       fall to the "guessing page N" prompt, which is honest, rather than
+       opening the wrong vendor's bill. */
+    if (!s || (!vh && s <= 4)){
+      if (named[q] && !vh) return 0;
+      if (invOwner[q] !== -1 && invOwner[q] !== i) return 0;
+    }
+    return s + vh * 5;
+  };
+
+  /* Which line each page looks most like, so no line walks off with a page
+     another line matches better. */
+  const cand = new Map();
+  const top = new Array(N).fill(0), topRow = new Array(N).fill(-1), tied = new Array(N).fill(false);
+  open.forEach((i, k) => {
+    const list = [];
+    for (let q = 0; q < N; q++){
+      const s = scoreAt(k, i, q);
+      if (s < MATCH_MIN) continue;
+      list.push({ p: q, s });
+      if (s > top[q]){ top[q] = s; topRow[q] = i; tied[q] = false; }
+      else if (s === top[q]) tied[q] = true;
+    }
+    list.sort((a, b) => b.s - a.s || a.p - b.p);
+    cand.set(i, list);
   });
 
   const take = (i, p, list) => {
