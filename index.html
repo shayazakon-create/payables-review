@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- This page is one file and is replaced in place when it is fixed. Without
+     these a browser keeps serving the copy it already has, so a fix that is
+     live looks like a fix that never shipped. -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Payables review</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -94,6 +100,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
 
 <header>
   <h1 style="cursor:pointer" onclick="goHome()">Payables review</h1>
+  <span class="muted small" id="hdrbuild" title="Which build of this page you are looking at. If this does not match what you were told to expect, your browser is showing a cached copy — reload with Ctrl+Shift+R (Cmd+Shift+R on a Mac)."></span>
   <span id="hdrctx" class="muted small"></span>
   <span style="flex:1"></span>
   <span id="hdrprog" class="muted small"></span>
@@ -637,7 +644,12 @@ function show(scr){
 }
 
 /* ---------- auth ---------- */
+/* Shown in the header. Bumped with any change worth being able to confirm
+   from the page itself, because "am I even running the new version?" cost a
+   round of this otherwise. */
+const BUILD = "v6 · 22 Sep";
 async function boot(){
+  const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
   if (!sb){ show("login"); $("liErr").textContent = "Not connected — reload the page and enter your Supabase URL and key (see setup guide)."; return; }
   const { data: { session } } = await sb.auth.getSession();
@@ -1438,7 +1450,7 @@ function renderPgLinks(){
        view to a guess and calling it a match. */
     let msg = '<b>No page matched this line.</b> Flip with ◀ ▶ to find its invoice and click <b>📎 Link page to row</b> — that is remembered.'
       + (S.pdfGuess != null ? ' <button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')" title="Backup is usually filed in aging order, so the invoice is often near here">↦ try page ' + (S.pdfGuess + 1) + '</button>' : '')
-      + (S.hasOcr ? ' <button style="padding:1px 9px;font-size:12px" onclick="whyNoPage()" title="Show what was searched for and where each part was found">🔍 why?</button>' : '');
+      + ' <button style="padding:1px 9px;font-size:12px" onclick="whyNoPage()" title="Show what was searched for and where each part was found">🔍 why?</button>';
     if (S.ocrRunning) msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below) — pages link themselves when it finishes.</span>';
     else if (!S.hasOcr) msg += ' <button style="padding:1px 9px;font-size:12px" onclick="runOcr(true)">✨ Read the PDF and link them all</button>';
     pl.innerHTML = S.readonly ? "" : msg;
@@ -1458,12 +1470,21 @@ function whyNoPage(){
   const r = S.M && S.M.rows[S.sel];
   const t = S.texts;
   if (!r) return;
-  if (!t || !t.length) return toast("The backup PDF has not been read yet — press ✨ Auto-match pages first.");
+  if (!t || !t.length){
+    $("pglinks").innerHTML = '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+      + '<b>The backup PDF has not been read yet on this build.</b><div style="margin-top:4px">'
+      + (S.ocrRunning ? 'It is being read right now — the progress line is below. Try again when it finishes.'
+                      : 'Press <b>✨ Auto-match pages</b> to read it, then press why? again.')
+      + '</div><div style="margin-top:5px"><a href="#" onclick="renderPgLinks();return false">close</a></div></div>';
+    return;
+  }
   const nd = rowNeedles(r);
   const sp = t.map(x => " " + (x || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
+  const st = t.map(x => " " + String(x || "").toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join(" ") + " ");
   const nm = t.map(x => " " + (x || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
   const pgs = n => n.length ? n.map(q => '<button style="padding:0 7px;font-size:12px;margin-right:3px" onclick="gotoPage(' + q + ')">' + (q + 1) + '</button>').join("") : '<span style="color:var(--red)">not on any page</span>';
-  const find = list => { const o = []; for (let q = 0; q < sp.length; q++) if (q !== S.M.summaryPage && list.some(x => sp[q].indexOf(" " + x + " ") >= 0)) o.push(q); return o; };
+  const find = list => { const o = []; for (let q = 0; q < sp.length; q++) if (q !== S.M.summaryPage && list.some(x => sp[q].indexOf(" " + x + " ") >= 0 || st[q].indexOf(" " + x + " ") >= 0)) o.push(q); return o; };
   const invAll = nd.inv.concat(nd.invAlt);
   const vHits = [];
   for (let q = 0; q < t.length; q++) if (q !== S.M.summaryPage && vendorHit(nd.vt, pageWords(t[q])) >= 0.8) vHits.push(q);
@@ -2009,7 +2030,7 @@ async function runOcr(rebuild){
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 5;
+const MATCH_VER = 6;
 /* The page's words, squashed the same way vendor names are (legal suffixes
    dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
    on the aging and on its invoice. */
@@ -2080,6 +2101,14 @@ function autoMatch(rows, texts, skip){
   /* amounts as whole numbers, so 113.07 is not found inside 2113.07 */
   const nm = texts.map(t => " " + (t || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
   const pw = texts.map(pageWords);
+  /* Invoice numbers are printed with separators inside them — "216-6563",
+     "INV-0004821", "#009283". Splitting a page on every non-letter leaves
+     "216" and "6563" as two separate words, so the aging's "216-6563" —
+     squashed to 2166563 to compare — matched nothing at all. Squashing each
+     whitespace-separated chunk instead keeps the number whole, while still
+     comparing whole chunks so it cannot match inside a longer number. */
+  const st = texts.map(t => " " + String(t || "").toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join(" ") + " ");
 
   const claimed = new Set();
   const byInv = new Map();
@@ -2115,7 +2144,7 @@ function autoMatch(rows, texts, skip){
      a bare substring of the page with every separator stripped, so a short
      number turned up inside an account number or a total on an unrelated
      page and the line was linked to somebody else's invoice. */
-  const onPage = (list, q) => list.some(x => sp[q].indexOf(" " + x + " ") >= 0);
+  const onPage = (list, q) => list.some(x => sp[q].indexOf(" " + x + " ") >= 0 || st[q].indexOf(" " + x + " ") >= 0);
   const invHit = (nd, q) => onPage(nd.inv, q);
 
   /* Pages carrying some line's invoice number: where one invoice ends and the
