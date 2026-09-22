@@ -219,7 +219,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
         <button id="btnMax" onclick="togglePdfMax()" title="Hide the table so the invoice fills the screen — arrows and A/Q/H still work">⛶ Bigger</button>
         <button id="btnPop" onclick="popOut()" title="Open the invoice in its own window — drag it to your second screen; it follows along as you click lines">🗗 Second window</button>
         <button id="btnLink" onclick="linkPage()" title="Remember that this PDF page belongs to the selected line">📎 Link page to row</button>
-        <button id="btnOcr" onclick="runOcr()" title="Reads the backup PDF and links each line to its invoice page, by invoice number, amount and vendor name">✨ Auto-match pages</button>
+        <button id="btnOcr" onclick="runOcr(true)" title="Reads the backup PDF and links each line to its invoice page, by invoice number, amount and vendor name">✨ Auto-match pages</button>
       </div>
       <div id="ocrbar"></div>
       <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px"><span id="nopdfmsg">No backup PDF attached to this package.</span><br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button> <button id="btnPdfRetry" class="hidden" onclick="retryPdf()">Try again</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
@@ -1260,12 +1260,11 @@ function selectRow(i){
          line's own position is the best guess available. */
       if (g == null && !S.M.rows.some(x => x.pages && x.pages.length)) g = i;
       if (g != null && g >= 0 && g < (S.pdfPages || 0)) S.pdfGuess = g;
-      /* Follow the guess rather than sitting on whatever page was showing.
-         Landing near the right invoice and saying so beats leaving the
-         reviewer on page 1 of a 58-invoice package with no way forward. */
-      if (S.pdfGuess != null && S.pdfGuess + 1 !== S.pdfPageNum){
-        S.pdfPageNum = S.pdfGuess + 1; renderPdf();
-      }
+      /* Do NOT move the view to the guess. Following it meant every click on
+         an unmatched line landed on a page near the right one but not it,
+         which reads as the app sending you somewhere random on every click
+         and is worse than not moving at all. The guess is offered as a
+         button instead, so going there is a decision, not a surprise. */
     } else if (pg + 1 !== S.pdfPageNum){
       S.pdfPageNum = pg + 1; renderPdf();
     }
@@ -1407,15 +1406,23 @@ function renderRight(){
 }
 function renderPgLinks(){
   updatePop();
+  const r = S.M && S.M.rows[S.sel];
+  if (S.pdf){
+    const on = r && r.pages && r.pages.includes(S.pdfPageNum - 1);
+    $("pglabel").innerHTML = S.pdfPageNum + " / " + S.pdfPages + (on ? ' <span style="color:var(--green)">📎</span>' : "");
+  }
   const pl = $("pglinks");
   if (!pl) return;
-  const r = S.M && S.M.rows[S.sel];
   if (!r || !S.pdf){ pl.innerHTML = ""; return; }
   const ps = r.pages || [];
   if (!ps.length){
-    let msg = '📎 <b>Guessing page ' + S.pdfPageNum + '</b> for this line — not linked yet. If it is the right invoice, click <b>📎 Link page to row</b> and it is remembered. If not, flip with ◀ ▶ and link it there.';
-    if (S.ocrRunning) msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below) — pages will link themselves when it finishes. Guessing meanwhile.</span>';
-    else if (!S.hasOcr) msg += ' <button style="padding:1px 9px;font-size:12px" onclick="runOcr()">✨ Read the PDF and link them all</button>';
+    /* Say plainly that nothing matched and stay put, rather than moving the
+       view to a guess and calling it a match. */
+    let msg = '<b>No page matched this line.</b> Flip with ◀ ▶ to find its invoice and click <b>📎 Link page to row</b> — that is remembered.'
+      + (S.pdfGuess != null ? ' <button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')" title="Backup is usually filed in aging order, so the invoice is often near here">↦ try page ' + (S.pdfGuess + 1) + '</button>' : '')
+      + (S.hasOcr ? ' <button style="padding:1px 9px;font-size:12px" onclick="whyNoPage()" title="Show what was searched for and where each part was found">🔍 why?</button>' : '');
+    if (S.ocrRunning) msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below) — pages link themselves when it finishes.</span>';
+    else if (!S.hasOcr) msg += ' <button style="padding:1px 9px;font-size:12px" onclick="runOcr(true)">✨ Read the PDF and link them all</button>';
     pl.innerHTML = S.readonly ? "" : msg;
     return;
   }
@@ -1425,6 +1432,40 @@ function renderPgLinks(){
     + (ps.length > 1 ? (pos >= 0 ? ' — viewing ' + (pos + 1) + ' of ' + ps.length : ' — click to view each') : '')
     + ': ' + ps.map((p, j) => '<button style="padding:1px 9px;font-size:12px;margin-right:4px;' + (p === cur ? 'border-color:var(--blue);color:var(--blue);font-weight:600;background:var(--blue-bg);' : '') + '" onclick="gotoPage(' + p + ')" title="Go to PDF page ' + (p + 1) + '">' + (j + 1) + '</button>').join("")
     + (S.readonly ? "" : ' <button style="padding:1px 9px;font-size:12px" onclick="clearPageLinks()" title="Forget these pages for this line and go back to guessing">✕ wrong page</button>');
+}
+/* What the matcher looked for on this line and where each part turned up.
+   Guessing at why a page did not match from the outside is hopeless — this
+   reads the same text the matcher reads and shows it. */
+function whyNoPage(){
+  const r = S.M && S.M.rows[S.sel];
+  const t = S.texts;
+  if (!r) return;
+  if (!t || !t.length) return toast("The backup PDF has not been read yet — press ✨ Auto-match pages first.");
+  const nd = rowNeedles(r);
+  const sp = t.map(x => " " + (x || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
+  const nm = t.map(x => " " + (x || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
+  const pgs = n => n.length ? n.map(q => '<button style="padding:0 7px;font-size:12px;margin-right:3px" onclick="gotoPage(' + q + ')">' + (q + 1) + '</button>').join("") : '<span style="color:var(--red)">not on any page</span>';
+  const find = list => { const o = []; for (let q = 0; q < sp.length; q++) if (q !== S.M.summaryPage && list.some(x => sp[q].indexOf(" " + x + " ") >= 0)) o.push(q); return o; };
+  const invAll = nd.inv.concat(nd.invAlt);
+  const vHits = [];
+  for (let q = 0; q < t.length; q++) if (q !== S.M.summaryPage && vendorHit(nd.vt, pageWords(t[q])) >= 0.8) vHits.push(q);
+  const aHits = [];
+  for (let q = 0; q < nm.length; q++) if (q !== S.M.summaryPage && nm[q].indexOf(" " + nd.amt + " ") >= 0) aHits.push(q);
+  const blank = t.filter(x => !x || x.replace(/[^a-z0-9]/gi, "").length < 24).length;
+  const row = (lab, what, hits) => '<tr><td style="padding:2px 8px 2px 0;white-space:nowrap">' + lab + '</td>'
+    + '<td style="padding:2px 8px 2px 0;font-family:monospace;font-size:11.5px">' + esc(what) + '</td>'
+    + '<td style="padding:2px 0">' + pgs(hits) + '</td></tr>';
+  $("pglinks").innerHTML =
+    '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+    + '<b>What was searched for on this line</b>'
+    + '<table style="margin-top:4px;border-collapse:collapse">'
+    + row("Invoice no.", invAll.length ? invAll.join("  ") : "(none on the aging)", find(invAll))
+    + row("Vendor", nd.vt.join(" ") || "(none)", vHits)
+    + row("Amount", nd.amt, aHits)
+    + '</table>'
+    + (blank ? '<div style="margin-top:5px;color:var(--red)">' + blank + ' of ' + t.length + ' pages came back with no readable text — those pages cannot be matched on anything.</div>' : '')
+    + '<div style="margin-top:5px" class="small">A page has to carry at least one of these to be linked. If the invoice is plainly there and none of the three was found, the page did not read — tell me the page number.</div>'
+    + '<div style="margin-top:5px"><a href="#" onclick="renderPgLinks();return false">close</a></div></div>';
 }
 function priorInvoicesHtml(k){
   const items = [];
@@ -1694,21 +1735,25 @@ async function loadPdf(id){
     if (first && first.pages && first.pages.length) S.pdfPageNum = first.pages[0] + 1;
     pdfFit();
     const fresh = !!rec.ocr && rec.ocrVer === TEXT_VER;
-    S.hasOcr = fresh;
+    S.hasOcr = fresh; S.texts = fresh ? rec.ocr : null;
     if (!fresh && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
       S.ocrAuto[id] = 1;
       toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
       runOcr();
-    } else if (fresh){
-      if (S.M.matchVer !== MATCH_VER && !S.readonly){
-        S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
+    } else if (fresh && !S.readonly){
+      /* Fill in the lines that have no page yet. Never clear the ones that
+         do. Bumping the matcher version used to wipe every automatic link in
+         the package and rebuild it from scratch on open, so a month that had
+         been matched correctly — and checked by hand — could come back worse
+         with no way back to what it had. Rebuilding everything is now only
+         what the Auto-match button does, because that is someone asking for
+         it. */
+      if (S.M.rows.some(r => !r.pages || !r.pages.length)){
         const k = autoMatch(S.M.rows, rec.ocr, S.M.summaryPage);
-        S.M.matchVer = MATCH_VER;
-        saveSoon(); renderTable();
-        toast("Re-linked the invoice pages (" + k + " of " + S.M.rows.length + ") — page matching has been corrected since this package was read.");
-      } else if (S.M.rows.some(r => !r.pages || !r.pages.length)){
-        autoMatch(S.M.rows, rec.ocr, S.M.summaryPage); saveSoon();
+        if (k) toast("Linked " + k + " more line" + (k > 1 ? "s" : "") + " to an invoice page.");
       }
+      S.M.matchVer = MATCH_VER;
+      saveSoon(); renderTable();
     }
   } catch(err){
     toast("Couldn't open the PDF: " + err.message);
@@ -1730,9 +1775,6 @@ async function renderPdf(){
   c.style.width = (vp.width / dpr) + "px";
   c.style.height = (vp.height / dpr) + "px";
   await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-  const r = S.M && S.M.rows[S.sel];
-  const linked = r && r.pages && r.pages.includes(S.pdfPageNum - 1);
-  $("pglabel").innerHTML = S.pdfPageNum + " / " + S.pdfPages + (linked ? ' <span style="color:var(--green)">📎</span>' : "");
   renderPgLinks();
 }
 function popOut(){
@@ -1827,7 +1869,7 @@ function gotoPage(p){
 /* ---------- reading the backup PDF ---------- */
 /* Bumped when the way pages are read changes, so a package whose text was
    captured the old way is re-read instead of keeping the worse text. */
-const TEXT_VER = 2;
+const TEXT_VER = 3;
 /* Backup packages are nearly always built from the PDFs vendors emailed, so
    the words are already in the file and getTextContent() hands them over
    exactly and instantly. Only pages that come back empty are real scans, and
@@ -1848,11 +1890,16 @@ async function pageTexts(prev, onProgress){
       const tc = await page.getTextContent();
       t = tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
     } catch(e){ t = ""; }
-    /* a page carrying a few stray characters is a scan with a stamp on it */
-    if (t.replace(/[^a-z0-9]/gi, "").length < 24){
-      t = (prev && prev[p - 1]) || "";
-      if (!t) scans.push(p);
-    }
+    /* Keep both readings of the page rather than letting one replace the
+       other. The text layer is exact where it exists and OCR covers the
+       scans, and matching only needs whichever of them carries the invoice
+       number. Swapping in the text layer threw signal away: a scanned page
+       with a thin text layer on it — a stamp, a page number, a fax header —
+       looked readable, so the real OCR text of that page was dropped and
+       every line that depended on it stopped matching. */
+    const had = (prev && prev[p - 1]) || "";
+    if (!had && t.replace(/[^a-z0-9]/gi, "").length < 24) scans.push(p);
+    t = had && had !== t ? (t + " \n " + had) : t;
     out.push(t);
     if (onProgress) onProgress("Reading page " + p + " of " + S.pdfPages + "…");
   }
@@ -1877,12 +1924,12 @@ async function pageTexts(prev, onProgress){
       c.width = vp.width; c.height = vp.height;
       await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
       const { data } = await worker.recognize(c);
-      out[p - 1] = data.text || "";
+      out[p - 1] = (out[p - 1] ? out[p - 1] + " \n " : "") + (data.text || "");
     }
   } finally { await worker.terminate(); }
   return out;
 }
-async function runOcr(){
+async function runOcr(rebuild){
   if (!S.pdf || S.ocrRunning) return;
   S.ocrRunning = true;
   const rec = await dbGet("pdfs", S.M.id).catch(() => null);
@@ -1899,17 +1946,21 @@ async function runOcr(){
       return toast("Auto-match failed: " + err.message);
     }
   }
-  S.hasOcr = true;
-  /* Drop the links this matcher made last time so a re-run can correct them;
-     anything linked by hand stays. */
-  S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
+  S.hasOcr = true; S.texts = texts;
+  /* Only when someone presses Auto-match: drop the links this matcher made
+     last time so the re-run can correct them. Anything linked by hand stays,
+     and the background read never gets here — it fills gaps only. */
+  if (rebuild) S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
   const n = autoMatch(S.M.rows, texts, S.M.summaryPage);
   S.M.matchVer = MATCH_VER;
   saveSoon(); renderPdf(); renderTable();
   $("ocrbar").textContent = "";
   $("btnOcr").disabled = false;
   S.ocrRunning = false;
-  toast("Matched " + n + " of " + S.M.rows.length + " lines to PDF pages. Use 📎 to fix any that are off.");
+  const tot = S.M.rows.filter(r => r.pages && r.pages.length).length;
+  toast(rebuild
+    ? "Re-matched: " + tot + " of " + S.M.rows.length + " lines now have an invoice page. Use 📎 to fix any that are off."
+    : "Linked " + n + " more line" + (n === 1 ? "" : "s") + " — " + tot + " of " + S.M.rows.length + " lines have an invoice page.");
   selectRow(S.sel);
 }
 
