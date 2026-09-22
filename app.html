@@ -1,0 +1,2488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- This page is one file and is replaced in place when it is fixed. Without
+     these a browser keeps serving the copy it already has, so a fix that is
+     live looks like a fix that never shipped. -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Payables review</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+:root{
+  --bg:#f5f4f0; --card:#fff; --border:#e2e0da; --border2:#c9c7c0;
+  --tx:#1a1a18; --tx2:#6b6a64; --tx3:#9a988f;
+  --green-bg:#e3f2e1; --green:#256b34; --green-line:#a9d3ab;
+  --orange-bg:#fdecd4; --orange:#8a4b08; --orange-line:#eec488;
+  --red:#b3261e; --red-bg:#fbe9e7;
+  --blue:#1a5fa8; --blue-bg:#e7f0fa;
+  --radius:8px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);}
+button{font:inherit;color:var(--tx);background:#fff;border:1px solid var(--border2);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:#f2f1ec}
+button.primary{background:#1a1a18;color:#fff;border-color:#1a1a18}
+button.primary:hover{background:#3a3a36}
+button:disabled{opacity:.45;cursor:default}
+input,select,textarea{font:inherit;border:1px solid var(--border2);border-radius:6px;padding:6px 10px;background:#fff;color:var(--tx)}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid #8ab4e8;outline-offset:1px}
+header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;font-weight:600;margin:0}
+.muted{color:var(--tx2)} .small{font-size:12px}
+main{padding:18px;max-width:1500px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.hidden{display:none!important}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;border:1px solid var(--border2);background:#fff;cursor:pointer}
+.chip.on{background:#1a1a18;color:#fff;border-color:#1a1a18}
+.monthcard{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius);background:#fff;margin-bottom:8px;cursor:pointer}
+.monthcard:hover{border-color:var(--border2)}
+.bar{height:6px;border-radius:3px;background:#eceae4;width:160px;overflow:hidden}
+.bar>i{display:block;height:100%;background:#256b34}
+table.rev{width:100%;border-collapse:collapse;font-size:13px}
+table.rev th{position:sticky;top:0;background:#faf9f6;text-align:left;font-weight:600;font-size:12px;color:var(--tx2);padding:7px 8px;border-bottom:1px solid var(--border2);z-index:1}
+table.rev td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+table.rev tr.sel td{box-shadow:inset 3px 0 0 var(--blue)}
+table.rev tr{cursor:pointer}
+table.rev tr:hover td{background:rgba(0,0,0,.025)}
+tr.st-approved td{background:var(--green-bg)!important}
+tr.st-hold td{background:var(--orange-bg)!important}
+.note-q{color:var(--red);font-weight:500}
+.note-h{color:var(--orange);font-weight:500}
+.delta-up{color:var(--red);font-size:11px;font-weight:600}
+.delta-dn{color:var(--green);font-size:11px;font-weight:600}
+.tag-new{color:var(--orange);font-size:11px;font-weight:600}
+.split{display:grid;grid-template-columns:minmax(400px,1fr) minmax(460px,1.25fr);gap:14px;align-items:start}
+body.pdfmax #leftcol{display:none}
+body.pdfmax .split{grid-template-columns:1fr}
+body.pdfmax .rightpane{position:static;max-height:none}
+body.pdfmax #pdfwrap{min-height:calc(100vh - 330px)}
+.leftpane{max-height:calc(100vh - 130px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius);background:#fff}
+.rightpane{position:sticky;top:64px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 130px)}
+.histstrip{display:flex;gap:8px;flex-wrap:wrap}
+.histcell{background:#faf9f6;border:1px solid var(--border);border-radius:6px;padding:5px 12px;text-align:center;min-width:70px}
+.histcell.now{background:var(--blue-bg);border-color:#b7cfe8}
+.histcell .m{font-size:11px;color:var(--tx3)} .histcell.now .m{color:var(--blue)}
+.warn{background:var(--red-bg);border:1px solid #f0c4c0;color:var(--red);border-radius:6px;padding:7px 11px;font-size:12.5px}
+.info{background:var(--blue-bg);border:1px solid #c3d8ee;color:var(--blue);border-radius:6px;padding:7px 11px;font-size:12.5px}
+#pdfwrap{flex:1;min-height:300px;overflow:auto;background:#8d8b85;border-radius:var(--radius);border:1px solid var(--border2);text-align:center}
+#pdfcanvas{margin:10px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.35);display:inline-block}
+.pdfctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pdfctl button{padding:4px 9px}
+.actions{display:flex;gap:8px}
+.actions button{flex:1;padding:9px 4px;font-weight:500}
+.actions .b-app.on{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.actions .b-q.on{background:var(--red-bg);border-color:#f0c4c0;color:var(--red)}
+.actions .b-hold.on{background:var(--orange-bg);border-color:var(--orange-line);color:var(--orange)}
+.dropzone{border:2px dashed var(--border2);border-radius:var(--radius);padding:22px;text-align:center;color:var(--tx2);background:#fff;cursor:pointer}
+.dropzone.has{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.maprow{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin-bottom:8px}
+.preview{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:6px}
+.preview table{width:100%;border-collapse:collapse;font-size:12px}
+.preview td,.preview th{padding:4px 8px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+kbd{background:#f0efe9;border:1px solid var(--border2);border-radius:4px;padding:0 5px;font-size:11px;font-family:inherit}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#1a1a18;color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50}
+.rowmeta{font-size:11.5px;color:var(--tx2)}
+#ocrbar{font-size:12px;color:var(--tx2)}
+.desc-cell{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:980px){ .split{grid-template-columns:1fr} .rightpane{position:static;max-height:none} }
+body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonly #btnLink,body.readonly #ocrbar{display:none!important}
+</style>
+</head>
+<body>
+
+<header>
+  <h1 style="cursor:pointer" onclick="goHome()">Payables review</h1>
+  <span class="muted small" id="hdrbuild" title="Which build of this page you are looking at. If this does not match what you were told to expect, your browser is showing a cached copy — reload with Ctrl+Shift+R (Cmd+Shift+R on a Mac)."></span>
+  <span id="hdrctx" class="muted small"></span>
+  <span style="flex:1"></span>
+  <span id="hdrprog" class="muted small"></span>
+  <button id="btnPrev" class="hidden" onclick="applyPrevDecisions()" title="Copy your approve/hold/question decisions from earlier months for invoices that are carried over unchanged">Apply last month's decisions</button>
+  <button id="btnShare" class="hidden" onclick="shareMonth()" title="Create a private read-only link you can send to someone — no login needed on their side">🔗 Share</button>
+  <button id="btnExport" class="hidden primary" onclick="exportXlsx()">Export for manager (.xlsx)</button>
+  <span id="useremail" class="muted small"></span>
+  <button id="btnOut" class="hidden" onclick="doLogout()">Sign out</button>
+</header>
+
+<main id="scr-login" class="hidden">
+  <div class="card" style="max-width:380px;margin:70px auto">
+    <h2 style="margin-top:0;font-size:18px">Sign in</h2>
+    <input id="liEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px" autocomplete="username">
+    <input id="liPass" type="password" placeholder="Password" style="width:100%;margin-bottom:10px" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="primary" style="width:100%" onclick="doLogin()">Sign in</button>
+    <div id="liErr" class="small" style="color:var(--red);margin-top:8px"></div>
+    <p class="small muted" style="margin-bottom:0">New logins are created by the account owner in the Supabase dashboard — see the setup guide.</p>
+  </div>
+</main>
+
+<main id="scr-home">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <h2 style="margin:0;font-size:18px">Your buildings</h2>
+    <div style="display:flex;gap:8px">
+      <button onclick="exportBackup()" title="Download everything (all packages, statuses, notes) as one file">⬇ Backup</button>
+      <button onclick="document.getElementById('fBak').click()" title="Load a backup file made with the ⬇ Backup button — e.g. to move your work from the local file version">⬆ Import backup</button>
+      <input type="file" id="fBak" accept=".json,application/json" class="hidden">
+      <button onclick="addBuilding()">+ Add building</button>
+      <button class="primary" onclick="goImport()">+ New month</button>
+    </div>
+  </div>
+  <div id="homelist"></div>
+  <p class="muted small" style="margin-top:18px">Everything is saved to your private account automatically — you can sign in from any computer and pick up where you left off.</p>
+</main>
+
+<main id="scr-import" class="hidden">
+  <div class="card" style="max-width:760px;margin:0 auto">
+    <h2 style="margin-top:0;font-size:18px">New month</h2>
+    <div style="display:grid;grid-template-columns:1fr 200px;gap:10px;margin-bottom:12px">
+      <div>
+        <label class="small muted">Building</label><br>
+        <select id="inBuilding" style="width:100%" onchange="bldChanged()"></select>
+        <input id="inBuildingNew" class="hidden" placeholder="New building name" style="width:100%;margin-top:6px" oninput="importValidate()">
+      </div>
+      <div>
+        <label class="small muted">As-of date</label><br>
+        <input id="inPeriod" type="date" style="width:100%">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="dropzone" id="dzX" onclick="document.getElementById('fX').click()">
+        <b>Aging spreadsheet</b><br><span class="small">click or drop .xlsx here</span>
+        <input type="file" id="fX" accept=".xlsx,.xls,.csv" class="hidden">
+      </div>
+      <div class="dropzone" id="dzP" onclick="document.getElementById('fP').click()">
+        <b>Invoice backup</b><br><span class="small">click or drop .pdf here (optional)</span>
+        <input type="file" id="fP" accept=".pdf" class="hidden">
+      </div>
+    </div>
+    <p class="small" style="margin:0 0 12px"><a href="#" onclick="pdfOnlyStart();return false" style="color:var(--blue)">No spreadsheet? If the summary list is a page inside the PDF, click here and I'll read it from there</a></p>
+    <div id="gridbox" class="hidden">
+      <h3 style="font-size:14px;margin:14px 0 6px">Lines read from page <span id="gridpg"></span> — check them against the page</h3>
+      <p class="small muted" style="margin-top:0">Reading a scan isn't perfect: fix wording, fill in missing invoice #s, delete junk lines. Fix Amount and HST and the Total fills itself — the Lines total below should match the TOTAL on the page.</p>
+      <div class="preview" id="gridtable" style="max-height:340px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <button onclick="gridAddRow()">+ Add line</button>
+        <span class="small">Lines total: <b id="gridtotal"></b> — should match the TOTAL on the page</span>
+      </div>
+    </div>
+    <div id="mapbox" class="hidden">
+      <h3 style="font-size:14px;margin:14px 0 8px">Check the columns</h3>
+      <p class="small muted" style="margin-top:0">I guessed which column is which. Fix any that are wrong — the choice is remembered for this building.</p>
+      <div id="maprows"></div>
+      <h3 style="font-size:14px;margin:14px 0 6px">Preview — <span id="pvcount"></span></h3>
+      <div class="preview" id="pvtable"></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button onclick="goHome()">Cancel</button>
+      <button class="primary" id="btnStart" disabled onclick="startReview()">Start review</button>
+    </div>
+  </div>
+</main>
+
+<main id="scr-review" class="hidden" style="max-width:1500px">
+  <div class="split">
+    <div id="leftcol">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+        <span class="chip on" data-f="all" onclick="setFilter('all')">All</span>
+        <span class="chip" data-f="open" onclick="setFilter('open')">Unreviewed</span>
+        <span class="chip" data-f="flag" onclick="setFilter('flag')">Questions & holds</span>
+        <span style="flex:1"></span>
+        <span class="muted small"><kbd>↑</kbd><kbd>↓</kbd> rows · <kbd>A</kbd> approve · <kbd>Q</kbd> question · <kbd>H</kbd> hold · <kbd>←</kbd><kbd>→</kbd> pages</span>
+      </div>
+      <div class="leftpane">
+        <table class="rev">
+          <thead><tr><th style="width:26%">Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th><th style="width:20%">Notes</th></tr></thead>
+          <tbody id="revbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="rightpane">
+      <div class="card" style="padding:12px 14px">
+        <div id="selhead"></div>
+        <div id="hist" style="margin-top:8px"></div>
+        <div id="jobbox" style="margin-top:8px"></div>
+        <div id="dupebox" style="margin-top:8px"></div>
+        <div class="actions" style="margin-top:10px">
+          <button class="b-app" id="bApp" onclick="act('approved')">✓ Approve</button>
+          <button class="b-q" id="bQ" onclick="act('question')">? Question</button>
+          <button class="b-hold" id="bHold" onclick="act('hold')">⏸ Hold</button>
+        </div>
+        <textarea id="noteinp" rows="2" placeholder="Note for the manager…" style="width:100%;margin-top:8px;resize:vertical" oninput="noteChanged()"></textarea>
+      </div>
+      <div id="pglinks" class="small muted"></div>
+      <div class="pdfctl">
+        <button onclick="pdfPage(-1)" title="Previous page">◀</button>
+        <span id="pglabel" class="small muted">– / –</span>
+        <button onclick="pdfPage(1)" title="Next page">▶</button>
+        <button onclick="pdfZoom(-1)">−</button>
+        <button onclick="pdfZoom(1)">+</button>
+        <button onclick="pdfFit()">Fit</button>
+        <button id="btnMax" onclick="togglePdfMax()" title="Hide the table so the invoice fills the screen — arrows and A/Q/H still work">⛶ Bigger</button>
+        <button id="btnPop" onclick="popOut()" title="Open the invoice in its own window — drag it to your second screen; it follows along as you click lines">🗗 Second window</button>
+        <button id="btnLink" onclick="linkPage()" title="Remember that this PDF page belongs to the selected line">📎 Link page to row</button>
+        <button id="btnOcr" onclick="runOcr(true)" title="Reads the backup PDF and links each line to its invoice page, by invoice number, amount and vendor name">✨ Auto-match pages</button>
+      </div>
+      <div id="ocrbar"></div>
+      <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px"><span id="nopdfmsg">No backup PDF attached to this package.</span><br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button> <button id="btnPdfRetry" class="hidden" onclick="retryPdf()">Try again</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
+    </div>
+  </div>
+</main>
+
+<div id="oldview" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:60;display:flex;flex-direction:column">
+  <div style="background:#1a1a18;color:#fff;padding:8px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <span id="ovinfo" style="font-weight:600"></span>
+    <span style="flex:1"></span>
+    <button id="ovprev" style="background:#2e2e2b;color:#fff;border-color:#555">◀</button>
+    <span id="ovpg" style="min-width:70px;text-align:center"></span>
+    <button id="ovnext" style="background:#2e2e2b;color:#fff;border-color:#555">▶</button>
+    <button id="ovclose" style="background:#2e2e2b;color:#fff;border-color:#555">✕ Close</button>
+  </div>
+  <div id="ovwrap" style="flex:1;overflow:auto;text-align:center"><canvas id="ovcanvas" style="background:#fff;margin:10px auto;box-shadow:0 1px 8px rgba(0,0,0,.5)"></canvas></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ---------- Supabase connection ----------
+   Replace the two values below with YOUR project's values
+   (Supabase dashboard → Project Settings → API). If you skip this,
+   the site will ask for them once per computer instead. */
+const SUPABASE_URL = "https://dcqqkwqlnaxgndotxorv.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_Tw_wP6oUWAqkC1dZpdm6Yg_y3zeR_oC";
+
+let sb = null;
+(function initSb(){
+  let u = SUPABASE_URL, k = SUPABASE_ANON_KEY;
+  if (u.indexOf("PASTE") === 0){
+    u = localStorage.getItem("sb_url") || "";
+    k = localStorage.getItem("sb_key") || "";
+    if (!u || !k){
+      u = (prompt("One-time setup on this computer.\n\nPaste your Supabase Project URL (looks like https://xxxx.supabase.co):") || "").trim();
+      k = (prompt("Paste your Supabase anon public key:") || "").trim();
+      if (u && k){ localStorage.setItem("sb_url", u); localStorage.setItem("sb_key", k); }
+    }
+  }
+  if (u && k){ try{ sb = supabase.createClient(u, k); } catch(e){ console.error(e); } }
+})();
+
+/* ---------- data layer (Supabase-backed, same interface as before) ---------- */
+const _cache = { months: null };
+const _pdfBlobCache = {};
+function pdfKey(id){ return String(id).replace(/[^a-zA-Z0-9._-]/g, "_") + ".pdf"; }
+async function dbAll(st){
+  if (st === "months"){
+    if (_cache.months) return _cache.months;
+    const { data, error } = await sb.from("months").select("*");
+    if (error) throw error;
+    _cache.months = data.map(r => ({ id: r.id, building: r.building, period: r.period, savedAt: r.saved_at, ...(r.data || {}) }));
+    return _cache.months;
+  }
+  const { data, error } = await sb.from(st).select("*");
+  if (error) throw error;
+  return data;
+}
+async function dbGet(st, key){
+  if (st === "months"){
+    const all = await dbAll("months");
+    return all.find(m => m.id === key);
+  }
+  if (st === "pdfs"){
+    const meta = await dbGet("kv", "pdfmeta|" + key);
+    if (!meta || !meta.v || !meta.v.exists) return undefined;
+    if (!_pdfBlobCache[key]){
+      const { data, error } = await sb.storage.from("pdfs").download(pdfKey(key));
+      if (error) return undefined;
+      _pdfBlobCache[key] = data;
+    }
+    return { id: key, blob: _pdfBlobCache[key], name: meta.v.name || "", ocr: meta.v.ocr || null, ocrVer: meta.v.ocrVer || 1 };
+  }
+  const { data, error } = await sb.from("kv").select("*").eq("k", key).maybeSingle();
+  if (error) throw error;
+  return data || undefined;
+}
+async function dbPut(st, v){
+  if (st === "months"){
+    _cache.months = null;
+    const { id, building, period, savedAt, ...rest } = v;
+    const { error } = await sb.from("months").upsert({ id, building, period, data: rest, saved_at: new Date().toISOString() });
+    if (error) throw error;
+    return;
+  }
+  if (st === "pdfs"){
+    if (v.blob){
+      const { error } = await sb.storage.from("pdfs").upload(pdfKey(v.id), v.blob, { upsert: true, contentType: "application/pdf" });
+      if (error) throw error;
+      _pdfBlobCache[v.id] = v.blob;
+    }
+    const prev = await dbGet("kv", "pdfmeta|" + v.id);
+    const keepOcr = v.ocr || (prev && prev.v && prev.v.ocr) || null;
+    const keepVer = v.ocr ? (v.ocrVer || 1) : (prev && prev.v && prev.v.ocrVer) || 1;
+    await dbPut("kv", { k: "pdfmeta|" + v.id, v: { exists: true, name: v.name || (prev && prev.v && prev.v.name) || "", ocr: keepOcr, ocrVer: keepVer } });
+    return;
+  }
+  const { error } = await sb.from("kv").upsert(v);
+  if (error) throw error;
+}
+async function dbDel(st, key){
+  if (st === "pdfs"){
+    await sb.storage.from("pdfs").remove([pdfKey(key)]);
+    await dbDel("kv", "pdfmeta|" + key);
+    delete _pdfBlobCache[key];
+    return;
+  }
+  if (st === "months") _cache.months = null;
+  const col = st === "kv" ? "k" : "id";
+  const { error } = await sb.from(st).delete().eq(col, key);
+  if (error) throw error;
+}
+
+/* ---------- utilities ---------- */
+const $ = id => document.getElementById(id);
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.style.opacity=1; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity=0, 2600); }
+function fmt(n){ return Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+const _vkCache = new Map();
+function vkeyFull(name){
+  const s = String(name == null ? "" : name);
+  let v = _vkCache.get(s);
+  if (v === undefined){ v = s.toLowerCase().replace(/[^a-z0-9]/g,""); _vkCache.set(s, v); }
+  return v;
+}
+function vkey(name){ return vkeyFull(name).slice(0,14); }
+/* Vendor names drift between agings: "BELL" one month and "BELL CANADA" the
+   next, "Burlington Hydro" vs "Burlington Hydro Electricity Inc", "Enbridge"
+   vs "Enbridge Gas Distribution". Two names count as the same vendor when the
+   squashed names match, or when one name's words are the opening words of the
+   other. Legal suffixes (inc/ltd/corp...) are ignored. "Bell" still does NOT
+   match "Bellwood Roofing" — the split has to fall on a word boundary. */
+const _VSTOP = { inc:1, incorporated:1, ltd:1, ltee:1, limited:1, llc:1, llp:1, lp:1,
+                 corp:1, corporation:1, co:1, company:1, the:1, plc:1, ulc:1, "&":1, and:1 };
+/* Agings abbreviate: "GLENLUM PROP MGMT" one month, "Glenlum Property
+   Management" the next. Expand the common short forms before comparing. */
+const _VABBR = { mgmt:"management", mgt:"management", mngmt:"management", mgnt:"management",
+  prop:"property", props:"property", properties:"property", ppty:"property",
+  svc:"service", svcs:"service", services:"service", serv:"service", servs:"service",
+  bldg:"building", bldgs:"building", dept:"department", mtce:"maintenance", maint:"maintenance",
+  constr:"construction", constn:"construction", elec:"electric", electrical:"electric",
+  electricity:"electric", mech:"mechanical", assoc:"associates", assocs:"associates",
+  intl:"international", natl:"national", ctr:"centre", cntr:"centre", center:"centre",
+  hldgs:"holdings", mfg:"manufacturing", engr:"engineering", eng:"engineering",
+  plmb:"plumbing", htg:"heating", ins:"insurance", grp:"group", mgmnt:"management" };
+const _vtCache = new Map();
+function vtokens(name){
+  const s = String(name == null ? "" : name);
+  let t = _vtCache.get(s);
+  if (t === undefined){
+    t = s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !_VSTOP[w]).map(w => _VABBR[w] || w);
+    _vtCache.set(s, t);
+  }
+  return t;
+}
+/* One word against another: exact, a shortening ("prop" / "property"), or a
+   consonant squeeze ("mgmt" / "management" - every letter in order, no vowels
+   after the first). Deliberately NOT used on a vendor's first word, so "Bell"
+   never swallows "Bellwood". */
+function tokEq(a, b){
+  if (a === b) return true;
+  const sh = a.length <= b.length ? a : b, lo = a.length <= b.length ? b : a;
+  if (sh.length >= 3 && lo.indexOf(sh) === 0) return true;
+  if (sh.length >= 3 && lo.length >= sh.length + 2 && sh[0] === lo[0] && !/[aeiou]/.test(sh.slice(1))){
+    let i = 0;
+    for (let j = 0; j < lo.length && i < sh.length; j++) if (lo[j] === sh[i]) i++;
+    if (i === sh.length) return true;
+  }
+  return false;
+}
+/* When one vendor bills several lines a month (two Bell accounts, gas + water
+   from one utility), the vendor name alone can't tell them apart. lineSig()
+   builds a per-line fingerprint from the account number in the description,
+   the invoice-number stem, the GL account, or failing that the description
+   wording — so each line gets its own history instead of the vendor's. */
+function lineSig(r){
+  if (!r) return "";
+  const acct = String(r.desc || "").match(/(?:acc?t|account|no\.?|#)\s*[:#]?\s*(\d[\d\- ]{4,})/i)
+            || String(r.desc || "").match(/\b(\d{3}[\- ]\d{3}[\- ]\d{4})\b/)
+            || String(r.desc || "").match(/\b(\d[\d\- ]{8,})\b/);
+  if (acct) return "a:" + acct[1].replace(/\D/g, "");
+  const b = invBase(r.inv);
+  if (b) return "i:" + b;
+  const g = vkeyFull(r.gl);
+  if (g) return "g:" + g;
+  const d = vtokens(r.desc).slice(0, 3).join("");
+  return d.length >= 4 ? "d:" + d : "";
+}
+/* names you have linked by hand win over any guessing */
+function vcanon(name){ const k = vkeyFull(name); return (S.alias && S.alias[k]) || k; }
+function sameVendor(a, b){
+  const x = vkeyFull(a), y = vkeyFull(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const ca = vcanon(a), cb = vcanon(b);
+  if (ca === cb) return true;
+  if (x.slice(0,14) === y.slice(0,14)) return true;
+  const shortS = x.length <= y.length ? x : y, longS = x.length <= y.length ? y : x;
+  if (shortS.length >= 5 && longS.indexOf(shortS) === 0) return true;
+  const ta = vtokens(a), tb = vtokens(b);
+  if (!ta.length || !tb.length) return false;
+  const st = ta.length <= tb.length ? ta : tb, lt = ta.length <= tb.length ? tb : ta;
+  if (st[0] !== lt[0]) return false;               // first word must match outright
+  for (let i = 1; i < st.length; i++) if (!tokEq(st[i], lt[i])) return false;
+  return st.length >= 2 || st[0].length >= 4;
+}
+/* how close two vendor names look, for "did you mean" suggestions */
+function vendorSimilar(a, b){
+  const ta = vtokens(a), tb = vtokens(b);
+  if (!ta.length || !tb.length) return 0;
+  let shared = 0;
+  ta.forEach(t => { if (tb.some(u => tokEq(t, u))) shared++; });
+  let sc = shared / Math.max(ta.length, tb.length);
+  const A = vkeyFull(a), B = vkeyFull(b);
+  let i = 0; while (i < A.length && i < B.length && A[i] === B[i]) i++;
+  return Math.max(sc, i / Math.max(A.length, B.length));
+}
+async function linkVendorAlias(i){
+  const other = (S._aliasSug || [])[i];
+  if (!other || S.readonly) return;
+  const me = vkeyFull(S.M.rows[S.sel].vendor), them = vkeyFull(other);
+  if (!S.alias) S.alias = {};
+  const canon = S.alias[me] || me, oldTheirs = S.alias[them] || them;
+  Object.keys(S.alias).forEach(k => { if (S.alias[k] === oldTheirs) S.alias[k] = canon; });
+  S.alias[them] = canon; S.alias[me] = canon;
+  try{ await dbPut("kv", { k: "alias|" + vkey(S.M.building), v: S.alias }); }
+  catch(e){ toast("Couldn't save that link — check your connection."); }
+  S._deltaCache = new Map();
+  toast("Linked “" + other + "” to “" + S.M.rows[S.sel].vendor + "” for this building.");
+  renderTable(); renderRight();
+}
+function normInv(inv){ const s=String(inv||"").toLowerCase().replace(/[^a-z0-9]/g,""); return s.length>=3 ? s : ""; }
+function moLabel(period){
+  const p = String(period).split("-");
+  if (p.length >= 3) return new Date(+p[0], +p[1]-1, +p[2]).toLocaleString("en-US",{month:"short", day:"numeric", year:"numeric"});
+  return new Date(+p[0], +p[1]-1, 1).toLocaleString("en-US",{month:"short", year:"numeric"});
+}
+
+/*PARSE-START*/
+function detectPeriod(grid, filename){
+  const yr = y => { y = +y; return y < 100 ? 2000 + y : y; };
+  const pad = m => String(+m).padStart(2, "0");
+  let monthOnly = null;
+  for (let i = 0; i < Math.min(grid.length, 12); i++){
+    for (const c of (grid[i] || [])){
+      if (c instanceof Date && !isNaN(c) && c.getFullYear() > 2000) return c.getFullYear() + "-" + pad(c.getMonth() + 1) + "-" + pad(c.getDate());
+      if (typeof c !== "string") continue;
+      let m = c.match(/as\s*of\s*[:\s]*([01]?\d)[\/\-.](\d{1,2})[\/\-.](\d{2,4})/i);
+      if (m && +m[1] >= 1 && +m[1] <= 12) return yr(m[3]) + "-" + pad(m[1]) + "-" + pad(m[2]);
+      m = c.match(/period[:\s]*([01]?\d)\s*[\/\-.]\s*(\d{2,4})/i);
+      if (m && +m[1] >= 1 && +m[1] <= 12 && !monthOnly) monthOnly = yr(m[2]) + "-" + pad(m[1]);
+    }
+  }
+  const m = String(filename || "").match(/([01]?\d)[.\-\/](\d{1,2})[.\-\/](\d{2,4})/);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return yr(m[3]) + "-" + pad(m[1]) + "-" + pad(m[2]);
+  return monthOnly;
+}
+function toNum(v){
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  if (typeof v === "string"){
+    let s = v.replace(/[$,\s]/g,"");
+    let neg = /^\(.*\)$/.test(s); if (neg) s = s.slice(1,-1);
+    const n = parseFloat(s);
+    return isNaN(n) ? null : (neg ? -n : n);
+  }
+  return null;
+}
+function fmtDate(v){
+  if (v == null || v === "") return "";
+  if (v instanceof Date && !isNaN(v)) return (v.getMonth()+1)+"/"+v.getDate()+"/"+v.getFullYear();
+  if (typeof v === "number" && v > 20000 && v < 60000){
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return (d.getUTCMonth()+1)+"/"+d.getUTCDate()+"/"+d.getUTCFullYear();
+  }
+  return String(v).replace(/\s*0?0:00:00.*$/,"").trim();
+}
+function detectHeader(rows){
+  const kws = [/payee|vendor|name|supplier/i, /invoice|inv\b|ref/i, /date/i, /current|amount|owed|total|balance|due/i];
+  let best = 1, bi = -1;
+  for (let i = 0; i < Math.min(rows.length, 30); i++){
+    const r = rows[i] || [];
+    let s = 0;
+    kws.forEach(k => { if (r.some(c => typeof c === "string" && k.test(c))) s++; });
+    const nonEmpty = r.filter(c => c !== null && c !== "").length;
+    if (s > best && nonEmpty >= 3){ best = s; bi = i; }
+  }
+  return bi;
+}
+function colLabels(rows, h){
+  const width = Math.max(...rows.slice(Math.max(0,h), h+3).map(r => (r||[]).length), 1);
+  const isCont = i => {
+    const r = rows[i] || [];
+    const texts = r.filter(c => typeof c === "string" && c.trim()).length;
+    const nums = r.filter(c => typeof c === "number").length;
+    return nums === 0 && texts > 0 && texts <= width/2;
+  };
+  const use = [h];
+  if (isCont(h+1)){ use.push(h+1); if (isCont(h+2)) use.push(h+2); }
+  const out = [];
+  for (let j = 0; j < width; j++){
+    const parts = [];
+    use.forEach(i => { const v = (rows[i]||[])[j]; if (typeof v === "string" && v.trim()) parts.push(v.trim()); });
+    out.push(parts.join(" "));
+  }
+  return { labels: out, skip: use.length };
+}
+function autoMap(labels){
+  const find = res => { for (const re of res){ const i = labels.findIndex(l => re.test(l)); if (i >= 0) return i; } return -1; };
+  return {
+    vendor: find([/payee\s*name/i, /vendor\s*name/i, /supplier/i, /vendor/i, /payee/i, /^name$/i, /name/i]),
+    inv:    find([/invoice\s*#/i, /inv(oice)?\s*(no|num)/i, /invoice$/i, /reference/i, /^inv/i]),
+    date:   find([/invoice\s*date/i, /^date/i, /date/i]),
+    amount: find([/current\s*owed/i, /^current/i, /amount\s*due/i, /total\s*due/i, /^amount/i, /balance/i, /owed/i, /amount/i, /total/i]),
+    base:   -1,
+    tax:    find([/\bh\.?s\.?t\.?\b/i, /\bg\.?s\.?t\.?\b/i, /\bq\.?s\.?t\.?\b/i, /\bp\.?s\.?t\.?\b/i, /\bvat\b/i, /sales\s*tax/i, /\btaxe?s?\b/i]),
+    desc:   find([/notes/i, /description/i, /memo/i, /detail/i]),
+    gl:     find([/account/i, /\bg\.?l\.?\b/i]),
+  };
+}
+/* Some agings (UBRP) list the invoice net, then the HST, then the real total.
+   A plain "Amount" heading wins the column guess above, which would put the
+   pre-tax figure on the review — a $151.00 bill showing as $134.00. When a tax
+   column and a separate total column both exist AND net + tax = total actually
+   holds on the sheet's own rows, switch to the total and keep the net and tax
+   for the breakdown. The arithmetic check is what makes this safe for agings
+   that have only one amount column. */
+function fixGrossAmount(grid, hdr, skip, map, labels){
+  const find = res => { for (const re of res){ const i = labels.findIndex(l => re.test(l)); if (i >= 0) return i; } return -1; };
+  const totC = find([/total\s*due/i, /invoice\s*total/i, /total\s*amount/i, /^total\b/i, /\btotal\b/i, /^gross/i]);
+  const taxC = map.tax;
+  if (totC < 0 || taxC < 0 || totC === taxC) return map;
+  const netC = map.base >= 0 ? map.base : map.amount;
+  if (netC < 0 || netC === totC || netC === taxC) return map;
+  let ok = 0, seen = 0;
+  for (let i = hdr + skip; i < grid.length && seen < 40; i++){
+    const r = grid[i] || [];
+    const n = toNum(r[netC]), t = toNum(r[taxC]), g = toNum(r[totC]);
+    if (n === null || g === null || n === 0) continue;
+    seen++;
+    if (Math.abs(n + (t || 0) - g) <= 0.02) ok++;
+  }
+  if (seen >= 3 && ok >= Math.ceil(seen * 0.8)){
+    map.base = netC; map.amount = totC; map.tax = taxC;
+  }
+  return map;
+}
+function parseRows(rows, h, skip, m){
+  const out = [];
+  let cur = "";
+  for (let i = h + skip; i < rows.length; i++){
+    const r = rows[i] || [];
+    const firstText = r.find(c => typeof c === "string" && c.trim());
+    if (firstText && /^(total\b|grand\s*total)/i.test(firstText.trim())) continue;
+    const nameC = m.vendor >= 0 ? r[m.vendor] : null;
+    if (typeof nameC === "string" && nameC.trim()) cur = nameC.trim();
+    const baseV = m.base >= 0 ? toNum(r[m.base]) : null;
+    const taxV  = m.tax  >= 0 ? toNum(r[m.tax])  : null;
+    let amt = m.amount >= 0 ? toNum(r[m.amount]) : null;
+    if (amt === null && baseV !== null) amt = baseV + (taxV || 0);
+    if (amt === null || amt === 0) continue;
+    const splitOut = baseV !== null && Math.abs(baseV - amt) > 0.005;
+    const invS = String(m.inv >= 0 && r[m.inv] != null ? r[m.inv] : "").trim();
+    const dateS = m.date >= 0 ? fmtDate(r[m.date]) : "";
+    const descS = String(m.desc >= 0 && r[m.desc] != null ? r[m.desc] : "").trim();
+    const glS = String(m.gl >= 0 && r[m.gl] != null ? r[m.gl] : "").trim();
+    if (!invS && !dateS && !descS && !glS) continue;
+    out.push({
+      vendor: (typeof nameC === "string" && nameC.trim()) ? nameC.trim() : cur,
+      inv: invS,
+      date: dateS,
+      amount: amt,
+      base: splitOut ? baseV : null,
+      hst: splitOut ? taxV : null,
+      desc: descS,
+      gl: glS,
+      status: null, note: "", page: null
+    });
+  }
+  return out.filter(x => x.vendor);
+}
+/*PARSE-END*/
+
+/* ---------- app state ---------- */
+const S = {
+  screen: "home",
+  M: null,          // current month record {id,building,period,rows,savedAt}
+  prior: [],        // earlier months, same building, sorted desc (most recent first)
+  sel: 0,
+  filter: "all",
+  pdf: null,        // pdfjs document
+  pdfPageNum: 1, pdfPages: 0, zoom: 1, fitScale: 1,
+  imp: { grid: null, hdr: -1, skip: 1, map: null, rows: [], pdfFile: null, xlsxName: "" },
+  saveTimer: null, ocrAuto: {}, ocrRunning: false, readonly: false, sharedPdfUrl: null, pop: null, jobs: [], histAll: false, pdfGuess: null, hasOcr: false,
+};
+
+function show(scr){
+  ["login","home","import","review"].forEach(s => $("scr-"+s).classList.toggle("hidden", s !== scr));
+  S.screen = scr;
+  $("btnExport").classList.toggle("hidden", scr !== "review");
+  $("btnPrev").classList.toggle("hidden", scr !== "review" || !S.prior.length || S.readonly);
+  $("btnShare").classList.toggle("hidden", scr !== "review" || S.readonly);
+  if (scr !== "review"){
+    $("hdrctx").textContent = ""; $("hdrprog").textContent = "";
+    document.body.classList.remove("pdfmax");
+    const bm = $("btnMax"); if (bm) bm.textContent = "⛶ Bigger";
+    if (S.pop && !S.pop.closed){ S.pop.close(); }
+    S.pop = null;
+    const pw = $("pdfwrap"); if (pw) pw.style.display = "";
+    const bp = $("btnPop"); if (bp) bp.textContent = "🗗 Second window";
+  }
+}
+
+/* ---------- auth ---------- */
+/* Shown in the header. Bumped with any change worth being able to confirm
+   from the page itself, because "am I even running the new version?" cost a
+   round of this otherwise. */
+const BUILD = "v7 · 22 Sep · app.html";
+async function boot(){
+  const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
+  if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
+  if (!sb){ show("login"); $("liErr").textContent = "Not connected — reload the page and enter your Supabase URL and key (see setup guide)."; return; }
+  const { data: { session } } = await sb.auth.getSession();
+  if (session){ loggedIn(session); } else { show("login"); }
+}
+function loggedIn(session){
+  $("useremail").textContent = session.user.email;
+  $("btnOut").classList.remove("hidden");
+  goHome();
+}
+async function doLogin(){
+  if (!sb) return;
+  $("liErr").textContent = "";
+  const { data, error } = await sb.auth.signInWithPassword({ email: $("liEmail").value.trim(), password: $("liPass").value });
+  if (error){ $("liErr").textContent = error.message; return; }
+  loggedIn(data.session);
+}
+async function doLogout(){
+  await saveNow();
+  await sb.auth.signOut();
+  location.reload();
+}
+
+/* ---------- share (read-only link) ---------- */
+async function shareMonth(){
+  await saveNow();
+  const id = S.M.id;
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(24)), b => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+  let pdfUrl = null;
+  const meta = await dbGet("kv", "pdfmeta|" + id);
+  if (meta && meta.v && meta.v.exists){
+    const { data } = await sb.storage.from("pdfs").createSignedUrl(pdfKey(id), 60 * 60 * 24 * 30);
+    if (data) pdfUrl = data.signedUrl;
+  }
+  await dbPut("kv", { k: "share|" + id, v: { monthId: id, token, pdfUrl, created: new Date().toISOString() } });
+  const link = location.origin + location.pathname + "#share=" + token;
+  try{ await navigator.clipboard.writeText(link); } catch(e){}
+  prompt("Read-only link copied to your clipboard — paste it into an email or text.\n\nAnyone with this link can VIEW this month only (statuses, notes, and the PDF) but can't change anything or see other months. Creating a new link replaces this one. The PDF part of the link works for 30 days.", link);
+}
+async function viewerBoot(token){
+  document.body.classList.add("readonly");
+  S.readonly = true;
+  if (!sb){ document.body.innerHTML = '<p style="padding:40px;text-align:center">This link is not set up correctly.</p>'; return; }
+  const { data, error } = await sb.rpc("shared_month", { tok: token });
+  if (error || !data){
+    $("scr-home").innerHTML = '<div class="card" style="max-width:420px;margin:70px auto;text-align:center">This share link is no longer valid. Ask the sender for a fresh one.</div>';
+    show("home"); return;
+  }
+  S.M = { id: "shared", building: data.building, period: data.period, rows: (data.data && data.data.rows) || [] };
+  S.M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
+  S.jobs = [];
+  S.prior = []; S.months = [];
+  S.sel = 0; S.filter = "all";
+  S.sharedPdfUrl = data.pdf || null;
+  $("hdrctx").textContent = data.building + " — " + moLabel(data.period) + "  ·  shared view (read-only)";
+  show("review");
+  $("btnExport").classList.add("hidden");
+  renderTable(); renderRight();
+  if (S.sharedPdfUrl) loadSharedPdf(S.sharedPdfUrl);
+  else { $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); }
+}
+async function loadSharedPdf(url){
+  try{
+    await ensureWorker();
+    const buf = await fetch(url).then(r => { if (!r.ok) throw new Error("PDF link expired"); return r.arrayBuffer(); });
+    S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    S.pdfPages = S.pdf.numPages;
+    S.pdfPageNum = 1;
+    pdfFit();
+  } catch(err){
+    $("pdfcanvas").classList.add("hidden");
+    $("nopdfmsg").textContent = "The PDF part of this link has expired — ask for a fresh link.";
+    $("nopdf").classList.remove("hidden");
+  }
+}
+
+/* ---------- home ---------- */
+async function allBuildings(){
+  const months = await dbAll("months");
+  const kv = await dbGet("kv", "buildings");
+  return [...new Set([...((kv && kv.v) || []), ...months.map(m => m.building)])].sort((a,b) => a.localeCompare(b));
+}
+async function addBuilding(){
+  const name = (prompt("Building name:") || "").trim();
+  if (!name) return;
+  const blds = await allBuildings();
+  if (blds.some(b => vkey(b) === vkey(name))) return toast("That building is already on the list.");
+  const kv = await dbGet("kv", "buildings");
+  await dbPut("kv", { k: "buildings", v: [...((kv && kv.v) || []), name] });
+  toast("Added " + name);
+  goHome();
+}
+async function exportBackup(){
+  await saveNow();
+  const months = await dbAll("months");
+  const kv = await dbAll("kv");
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify({ app: "payables-review", v: 1, exported: stamp, months, kv })], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "payables-review-backup-" + stamp + ".json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Backup downloaded (" + months.length + " packages). The invoice PDFs aren't inside it — re-attach them per package after importing.");
+}
+async function handleBackupFile(file){
+  try{
+    const data = JSON.parse(await file.text());
+    if (data.app !== "payables-review" || !Array.isArray(data.months)) throw new Error("that's not a Payables Review backup file");
+    let n = 0;
+    for (const m of data.months){ if (m && m.id){ await dbPut("months", m); n++; } }
+    for (const k of (data.kv || [])){ if (k && k.k){ await dbPut("kv", k); } }
+    toast("Imported " + n + " package" + (n === 1 ? "" : "s") + " with all statuses and notes. Open one and use “＋ Add the backup PDF” to re-attach its invoice images.");
+    goHome();
+  } catch(err){ toast("Couldn't import: " + err.message); }
+}
+async function goHome(){
+  if (S.readonly) return;
+  await saveNow();
+  S.M = null;
+  const months = await dbAll("months");
+  months.sort((a,b) => b.period.localeCompare(a.period));
+  const blds = await allBuildings();
+  const box = $("homelist");
+  if (!blds.length){
+    box.innerHTML = '<div class="card" style="text-align:center;color:var(--tx2);padding:40px">Nothing here yet. Click <b>+ Add building</b> to set up your buildings, then <b>+ New month</b> to add the first aging spreadsheet and backup PDF.</div>';
+  } else {
+    let html = "";
+    blds.forEach(b => {
+      html += '<h3 style="font-size:14px;margin:16px 0 8px">'+esc(b)+'</h3>';
+      const ms = months.filter(m => m.building === b);
+      if (!ms.length){ html += '<div class="small muted" style="margin-bottom:8px">No months yet — click “+ New month” when the first package arrives.</div>'; return; }
+      ms.forEach(mo => {
+        const done = mo.rows.filter(r => r.status).length, q = mo.rows.filter(r => r.status === "question").length, h = mo.rows.filter(r => r.status === "hold").length;
+        const tot = mo.rows.reduce((s,r) => s + r.amount, 0);
+        html += '<div class="monthcard" onclick="openMonth(\''+mo.id+'\')">'
+          + '<div><b>'+moLabel(mo.period)+'</b>'
+          + '<div class="small muted">'
+          /* The heading is the aging's own "as of" date, so a package worked on
+             today can sit under last month's heading and look lost. Say where it
+             came from and when it was added. */
+          + (mo.xlsxName ? esc(mo.xlsxName) + ' · ' : '')
+          + (mo.savedAt ? 'added ' + new Date(mo.savedAt).toLocaleString("en-US",{month:"short",day:"numeric"}) : '')
+          + '</div>'
+          + '<div class="small muted">'+mo.rows.length+' invoices · $'+fmt(tot)
+          + (q ? ' · <span style="color:var(--red)">'+q+' question'+(q>1?'s':'')+'</span>' : '')
+          + (h ? ' · <span style="color:var(--orange)">'+h+' on hold</span>' : '') + '</div></div>'
+          + '<div style="display:flex;align-items:center;gap:12px"><span class="small muted">'+done+'/'+mo.rows.length+' reviewed</span>'
+          + '<span class="bar"><i style="width:'+(mo.rows.length?Math.round(done/mo.rows.length*100):0)+'%"></i></span>'
+          + '<button onclick="event.stopPropagation();delMonth(\''+mo.id+'\')" title="Delete this month">🗑</button></div></div>';
+      });
+    });
+    box.innerHTML = html;
+  }
+  show("home");
+}
+async function delMonth(id){
+  if (!confirm("Delete this month and its saved statuses/notes? The PDF copy stored in the app is removed too. (Your original files are untouched.)")) return;
+  await dbDel("months", id); await dbDel("pdfs", id);
+  goHome();
+}
+
+/* ---------- import ---------- */
+async function goImport(){
+  const blds = await allBuildings();
+  $("inBuilding").innerHTML = blds.map(b => '<option value="'+esc(b)+'">'+esc(b)+'</option>').join("")
+    + '<option value="__new__">+ Add a new building…</option>';
+  $("inBuildingNew").value = ""; $("inBuildingNew").classList.add("hidden");
+  if (!blds.length){ $("inBuilding").value = "__new__"; $("inBuildingNew").classList.remove("hidden"); }
+  const now = new Date();
+  $("inPeriod").value = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
+  $("fX").value = ""; $("fP").value = "";
+  $("dzX").classList.remove("has"); $("dzP").classList.remove("has");
+  $("dzX").querySelector("b").textContent = "Aging spreadsheet";
+  $("dzP").querySelector("b").textContent = "Invoice backup";
+  $("mapbox").classList.add("hidden"); $("gridbox").classList.add("hidden"); $("btnStart").disabled = true;
+  GR = [];
+  S.imp = { grid:null, hdr:-1, skip:1, map:null, rows:[], pdfFile:null, xlsxName:"", summaryPage:null };
+  show("import");
+}
+["dzX","dzP"].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener("dragover", e => { e.preventDefault(); });
+  el.addEventListener("drop", e => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f) (id === "dzX" ? handleXlsx : handlePdf)(f);
+  });
+});
+function getBuilding(){
+  const v = $("inBuilding").value;
+  return v === "__new__" ? $("inBuildingNew").value.trim() : v;
+}
+function bldChanged(){
+  $("inBuildingNew").classList.toggle("hidden", $("inBuilding").value !== "__new__");
+  if ($("inBuilding").value === "__new__") $("inBuildingNew").focus();
+  importValidate();
+}
+function importValidate(){
+  $("btnStart").disabled = !(S.imp.rows.length && getBuilding() && $("inPeriod").value);
+}
+$("fX").addEventListener("change", e => e.target.files[0] && handleXlsx(e.target.files[0]));
+$("fP").addEventListener("change", e => e.target.files[0] && handlePdf(e.target.files[0]));
+$("fBak").addEventListener("change", e => { if (e.target.files[0]) handleBackupFile(e.target.files[0]); e.target.value = ""; });
+$("fLatePdf").addEventListener("change", async e => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (!f || !S.M || S.readonly) return;
+  try{
+    const buf = await f.arrayBuffer();
+    const prev = await dbGet("pdfs", S.M.id).catch(() => null);
+    await dbPut("pdfs", { id: S.M.id, blob: new Blob([buf], { type: "application/pdf" }), name: f.name, ocr: (prev && prev.ocr) || null });
+    toast("Backup PDF attached.");
+    S.ocrAuto[S.M.id] = 0;
+    loadPdf(S.M.id);
+  } catch(err){ toast("Couldn't attach the PDF: " + err.message); }
+});
+
+async function handleXlsx(file){
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    const hdr = detectHeader(grid);
+    if (hdr < 0){ toast("Couldn't find a header row in that spreadsheet."); return; }
+    const { labels, skip } = colLabels(grid, hdr);
+    S.imp.grid = grid; S.imp.hdr = hdr; S.imp.skip = skip; S.imp.labels = labels; S.imp.xlsxName = file.name;
+    const per = detectPeriod(grid, file.name);
+    if (per){ $("inPeriod").value = per.length === 7 ? per + "-01" : per; toast("Date detected from the report: " + moLabel(per)); }
+    const auto = fixGrossAmount(grid, hdr, skip, autoMap(labels), labels);
+    let map = auto;
+    const saved = await dbGet("kv", "map|" + vkey(getBuilding()));
+    if (saved && saved.v){
+      const sv = saved.v.map || saved.v;
+      const savedLabels = saved.v.labels || null;
+      const cand = {};
+      for (const k in auto){
+        let idx = (sv[k] != null) ? sv[k] : -1;
+        if (savedLabels && idx >= 0){
+          const j = labels.indexOf(savedLabels[idx]);
+          idx = j;
+        } else if (idx >= labels.length) idx = -1;
+        cand[k] = idx >= 0 ? idx : auto[k];
+      }
+      const nCand = parseRows(grid, hdr, skip, cand).length;
+      const nAuto = parseRows(grid, hdr, skip, auto).length;
+      if (nCand > 0 && nCand >= nAuto) map = cand;
+    }
+    /* A map saved before the tax fix could point back at the pre-tax column,
+       so re-check it against the sheet's own arithmetic. */
+    map = fixGrossAmount(grid, hdr, skip, map, labels);
+    S.imp.map = map;
+    $("gridbox").classList.add("hidden"); GR = []; S.imp.summaryPage = null;
+    $("dzX").classList.add("has");
+    $("dzX").querySelector("b").textContent = file.name;
+    renderMapping();
+  } catch(err){ toast("Couldn't read that file: " + err.message); }
+}
+function handlePdf(file){
+  S.imp.pdfFile = file;
+  $("dzP").classList.add("has");
+  $("dzP").querySelector("b").textContent = file.name;
+}
+const MAPFIELDS = [["vendor","Vendor name"],["inv","Invoice #"],["date","Invoice date"],["amount","Amount owed — the total WITH tax"],["base","Amount before tax (optional)"],["tax","HST / tax (optional)"],["desc","Description / notes"],["gl","Account / GL (optional)"]];
+function renderMapping(){
+  const { labels, map, grid, hdr, skip } = S.imp;
+  const opts = i => '<option value="-1">— none —</option>' + labels.map((l, j) => {
+    let sample = "";
+    for (let k = hdr + skip; k < Math.min(grid.length, hdr + skip + 25); k++){
+      const v = (grid[k]||[])[j];
+      if (v != null && String(v).trim()){ sample = v instanceof Date ? fmtDate(v) : String(v); break; }
+    }
+    return '<option value="'+j+'"'+(map[i]===j?" selected":"")+'>'+esc(l || "(column "+(j+1)+")")+(sample?"  ·  e.g. "+esc(String(sample).slice(0,24)):"")+'</option>';
+  }).join("");
+  $("maprows").innerHTML = MAPFIELDS.map(([k,lab]) =>
+    '<div class="maprow"><label class="small">'+lab+'</label><select data-k="'+k+'" onchange="mapChanged(this)">'+opts(k)+'</select></div>').join("");
+  refreshPreview();
+}
+function mapChanged(sel){ S.imp.map[sel.dataset.k] = +sel.value; refreshPreview(); }
+function refreshPreview(){
+  const { grid, hdr, skip, map } = S.imp;
+  const rows = parseRows(grid, hdr, skip, map);
+  S.imp.rows = rows;
+  const tot = rows.reduce((s,r) => s + r.amount, 0);
+  const withTax = rows.filter(r => r.base != null).length;
+  $("pvcount").textContent = rows.length + " invoices, total $" + fmt(tot)
+    + (withTax ? "  ·  amounts include tax" : "")
+    + "  —  this total should match the grand total on your spreadsheet";
+  $("pvtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th></tr>'
+    + rows.slice(0, 12).map(r => '<tr><td>'+esc(r.vendor)+'</td><td>'+esc(r.inv)+'</td><td>'+esc(r.date)+'</td><td style="text-align:right">$'+fmt(r.amount)+'</td><td class="desc-cell">'+esc(r.desc)+'</td></tr>').join("")
+    + (rows.length > 12 ? '<tr><td colspan="5" class="muted">… and '+(rows.length-12)+' more</td></tr>' : '') + '</table>';
+  $("mapbox").classList.remove("hidden");
+  importValidate();
+}
+$("inPeriod").addEventListener("input", importValidate);
+
+async function startReview(){
+  const building = getBuilding();
+  if (!building) return toast("Give the new building a name first.");
+  const period = $("inPeriod").value;
+  const id = vkey(building) + "|" + period;
+  const existing = await dbGet("months", id);
+  if (existing && !confirm(moLabel(period) + " for " + building + " already exists. Replace it? Your saved statuses on it will be lost.")) return;
+  const M = { id, building, period, rows: S.imp.rows, xlsxName: S.imp.xlsxName, summaryPage: (S.imp.summaryPage == null ? null : S.imp.summaryPage), savedAt: Date.now() };
+  await dbPut("months", M);
+  if (S.imp.map) await dbPut("kv", { k: "map|" + vkey(building), v: { map: S.imp.map, labels: S.imp.labels || null } });
+  const blds = await allBuildings();
+  if (!blds.some(b => vkey(b) === vkey(building))){
+    const kv = await dbGet("kv", "buildings");
+    await dbPut("kv", { k: "buildings", v: [...((kv && kv.v) || []), building] });
+  }
+  if (S.imp.pdfFile){
+    const buf = await S.imp.pdfFile.arrayBuffer();
+    await dbPut("pdfs", { id, blob: new Blob([buf], { type: "application/pdf" }), name: S.imp.pdfFile.name, ocr: null });
+  } else if (existing){
+    /* Re-importing the spreadsheet alone used to delete the stored backup PDF,
+       which is the opposite of what anyone re-importing to correct a column
+       expects. Keep it; deleting the month still removes it. */
+    const kept = await dbGet("pdfs", id).catch(() => null);
+    if (kept) toast("Kept the backup PDF already attached to this month. Use ✨ Auto-match pages to re-link the invoices.");
+  }
+  openMonth(id);
+}
+
+/* ---------- PDF-only import (summary list is a page inside the PDF) ---------- */
+let GR = [];
+/*OCRTABLE-START*/
+function detectPeriodText(t){
+  const months = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+  const pad = n => String(+n).padStart(2, "0");
+  let m = t.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s*(\d{4})/i);
+  if (m) return m[3] + "-" + pad(months[m[1].toLowerCase()]) + "-" + pad(m[2]);
+  m = t.match(/([01]?\d)[\/\-.](\d{1,2})[\/\-.](20\d{2})/);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return m[3] + "-" + pad(m[1]) + "-" + pad(m[2]);
+  return null;
+}
+function cleanTok(t){
+  const s = (t || "").replace(/^[\[\]{}()|~_—=«»‘’“”·:;,]+|[\[\]{}()|~_—=«»‘’“”·:;,]+$/g, "").trim();
+  if (!s) return null;
+  if (/^[eE]{1,4}$/.test(s) || /^[iIl|!]{1,2}$/.test(s) || /^[~—_=\-.]+$/.test(s) || /^r{1,3}$/i.test(s)) return null;
+  return s;
+}
+function wordsFromData(data){
+  const out = [];
+  const push = w => {
+    if (!w || !w.text || !w.bbox) return;
+    const conf = (w.confidence == null ? 100 : w.confidence);
+    const isMoney = /[\d,]+\.\d{2}/.test(w.text);
+    const t = isMoney ? w.text.trim().replace(/^[^$\d]+|[^\d]+$/g, "") : cleanTok(w.text);
+    if (t && (conf >= 40 || isMoney)) out.push({ t, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+  };
+  if (data.words && data.words.length) data.words.forEach(push);
+  else (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(push))));
+  return out;
+}
+function ocrTableRows(words, W){
+  const MONEY = /^\$?[\d,]{1,12}\.\d{2}$/;
+  const money = words.filter(w => MONEY.test(w.t));
+  if (!money.length) return [];
+  const yc = w => (w.y0 + w.y1) / 2;
+  const bands = [];
+  [...money].sort((a,b) => yc(a) - yc(b)).forEach(m => {
+    const h = m.y1 - m.y0;
+    const b = bands.find(b => Math.abs(b.yc - yc(m)) < h * 1.2);
+    if (b) b.items.push(m); else bands.push({ yc: yc(m), items: [m] });
+  });
+  bands.sort((a,b) => a.yc - b.yc);
+  const med = a => { const s = [...a].sort((x,y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const lineH = med(money.map(m => m.y1 - m.y0)) || 18;
+  const bandWords = (i, b) => {
+    const top = i > 0 ? (bands[i-1].yc + b.yc) / 2 : b.yc - 3.5 * lineH;
+    const bot = i < bands.length - 1 ? (b.yc + bands[i+1].yc) / 2 : b.yc + 3.5 * lineH;
+    const minx = Math.min(...b.items.map(m => m.x0));
+    return words.filter(w => !b.items.includes(w) && yc(w) > top && yc(w) < bot && w.x1 < minx && w.t !== "$" && w.t !== "|" && !/^(amount|hst|gst|total|cheque)$/i.test(w.t));
+  };
+  const toLines = tw => {
+    const sorted = [...tw].sort((a,b) => yc(a) - yc(b));
+    const lines = [];
+    sorted.forEach(w => {
+      const L = lines[lines.length - 1];
+      if (L && Math.abs(yc(w) - L.y) < lineH * 0.7){ L.ws.push(w); L.y = (L.y + yc(w)) / 2; }
+      else lines.push({ y: yc(w), ws: [w] });
+    });
+    return lines.map(l => l.ws.sort((a,b) => a.x0 - b.x0));
+  };
+  const all = bands.map((b, i) => ({ b, tw: bandWords(i, b) }));
+  const descxs = [];
+  all.forEach(({ tw }) => toLines(tw).forEach(ws => {
+    for (let j = 1; j < ws.length; j++){ if (ws[j].x0 - ws[j-1].x1 > W * 0.04){ descxs.push(ws[j].x0); break; } }
+  }));
+  const descX = med(descxs) || W * 0.25;
+  const out = [];
+  all.forEach(({ b, tw }) => {
+    const vend = [], desc = [];
+    toLines(tw).forEach(ws => ws.forEach(w => { (w.x0 < descX - W * 0.02 ? vend : desc).push(w.t); }));
+    const v = vend.join(" ").trim(), ds = desc.join(" ").trim();
+    if ((v + ds).replace(/\W/g, "").length < 3 || /^\W*total\W*$/i.test(v + ds)) return;
+    const ms = [...b.items].sort((a, b2) => a.x0 - b2.x0).map(m => toNum(m.t.replace(/^\$/, ""))).filter(x => x !== null);
+    if (!ms.length) return;
+    const total = ms[ms.length - 1];
+    const base = ms.length >= 2 ? ms[0] : null;
+    const hst = ms.length >= 3 ? ms[1] : null;
+    const im = ds.match(/invoice\s*[#3:]*\s*([A-Za-z0-9][\w\/-]{2,})/i);
+    out.push({ vendor: v || ds.split(/\s+/).slice(0, 3).join(" "), inv: im ? im[1] : "", date: "", amount: total, base, hst, desc: ds, gl: "", status: null, note: "", page: null });
+  });
+  return out.filter(r => {
+    const others = out.filter(o => o !== r);
+    if (others.length < 3) return true;
+    const oa = others.reduce((s, o) => s + o.amount, 0);
+    const ob = others.reduce((s, o) => s + (o.base == null ? o.amount : o.base), 0);
+    return Math.abs(r.amount - oa) > 0.02 && Math.abs(r.amount - ob) > 0.02;
+  });
+}
+/*OCRTABLE-END*/
+async function pdfOnlyStart(){
+  if (!S.imp.pdfFile){ toast("Add the PDF in the right-hand box first — the summary page has to be inside it."); return; }
+  const pg = Math.max(1, parseInt(prompt("Which page of the PDF is the summary list?", "1"), 10) || 1);
+  toast("Reading page " + pg + "… takes about 15 seconds");
+  try{
+    await ensureWorker();
+    const buf = await S.imp.pdfFile.arrayBuffer();
+    const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+    if (pg > doc.numPages){ toast("That PDF only has " + doc.numPages + " pages."); return; }
+    const page = await doc.getPage(pg);
+    const vp = page.getViewport({ scale: 3 });
+    const c = document.createElement("canvas");
+    c.width = vp.width; c.height = vp.height;
+    await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+    if (!window.Tesseract){
+      await new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js"; s.onload = res; s.onerror = () => rej(new Error("couldn't load the text reader")); document.head.appendChild(s); });
+    }
+    const worker = await Tesseract.createWorker("eng");
+    await worker.setParameters({ tessedit_pageseg_mode: "11", user_defined_dpi: "300" });
+    const { data } = await worker.recognize(c, {}, { blocks: true, text: true });
+    await worker.terminate();
+    const per = detectPeriodText(data.text || "");
+    if (per) $("inPeriod").value = per.length === 7 ? per + "-01" : per;
+    GR = ocrTableRows(wordsFromData(data), c.width);
+    S.imp.summaryPage = pg - 1;
+    S.imp.map = null; S.imp.xlsxName = "(read from PDF page " + pg + ")";
+    $("mapbox").classList.add("hidden");
+    $("gridpg").textContent = pg;
+    renderGrid();
+    toast(GR.length ? "Found " + GR.length + " lines — check each one against the page." : "Couldn't find amounts on that page — add the lines by hand with + Add line.");
+  } catch(err){ toast("Couldn't read that page: " + err.message); }
+}
+function renderGrid(){
+  $("gridbox").classList.remove("hidden");
+  const num = v => v == null ? "" : v;
+  $("gridtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th>Amount</th><th>HST/tax</th><th>Total</th><th>Description</th><th></th></tr>'
+    + GR.map((r, i) =>
+      '<tr><td><input style="width:145px" value="' + esc(r.vendor) + '" oninput="GR[' + i + '].vendor=this.value;gridTotal()"></td>'
+      + '<td><input style="width:100px" value="' + esc(r.inv) + '" oninput="GR[' + i + '].inv=this.value"></td>'
+      + '<td><input style="width:70px" value="' + esc(r.date) + '" oninput="GR[' + i + '].date=this.value"></td>'
+      + '<td><input style="width:80px" value="' + esc(num(r.base)) + '" oninput="gridMoney(' + i + ',\'base\',this.value)"></td>'
+      + '<td><input style="width:70px" value="' + esc(num(r.hst)) + '" oninput="gridMoney(' + i + ',\'hst\',this.value)"></td>'
+      + '<td><input style="width:85px;font-weight:600" value="' + esc(num(r.amount)) + '" oninput="GR[' + i + '].amount=this.value;gridTotal()" id="grTot' + i + '"></td>'
+      + '<td><input style="width:200px" value="' + esc(r.desc) + '" oninput="GR[' + i + '].desc=this.value"></td>'
+      + '<td><button onclick="GR.splice(' + i + ',1);renderGrid()" title="Delete line">✕</button></td></tr>').join("")
+    + '</table>';
+  gridTotal();
+}
+function gridMoney(i, k, v){
+  GR[i][k] = toNum(v);
+  const b = GR[i].base;
+  if (b != null){
+    GR[i].amount = Math.round((b + (GR[i].hst || 0)) * 100) / 100;
+    const el = $("grTot" + i);
+    if (el) el.value = GR[i].amount;
+  }
+  gridTotal();
+}
+function gridAddRow(){
+  GR.push({ vendor: "", inv: "", date: "", amount: "", base: null, hst: null, desc: "", gl: "", status: null, note: "", page: null });
+  renderGrid();
+}
+function gridTotal(){
+  S.imp.rows = GR.map(r => ({ ...r, amount: toNum(String(r.amount)) })).filter(r => r.vendor && r.amount);
+  $("gridtotal").textContent = "$" + fmt(S.imp.rows.reduce((s, r) => s + r.amount, 0));
+  importValidate();
+}
+
+/* ---------- review ---------- */
+async function openMonth(id){
+  const M = await dbGet("months", id);
+  if (!M) return toast("Month not found");
+  /* A change the server never received — the tab was closed, or the
+     connection dropped. Whichever copy is newer wins. */
+  try{
+    const raw = localStorage.getItem(journalKey(id));
+    const d = raw && JSON.parse(raw);
+    /* Not a strict ">": the local copy is written first and the server copy
+       is made from it, so an equal stamp means the same change — and two
+       saves inside one millisecond are ordinary. A tie used to throw the
+       local copy away, taking any unsaved edit with it. A copy is only left
+       behind at all when a save did not get through, so it is discarded only
+       when the server plainly has something newer. */
+    if (d && d.rows && (d.savedAt || 0) >= (M.savedAt || 0)){
+      M.rows = d.rows; M.matchVer = d.matchVer; M.savedAt = d.savedAt;
+      if (d.summaryPage != null) M.summaryPage = d.summaryPage;
+      toast("Restored the changes this computer had not managed to save yet.");
+      dbPut("months", M).then(() => { try{ localStorage.removeItem(journalKey(id)); }catch(e){} }).catch(() => {});
+    } else if (d){ localStorage.removeItem(journalKey(id)); }
+  } catch(e){ /* nothing usable stored */ }
+  S.M = M; S.sel = 0; S.filter = "all";
+  M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
+  const all = await dbAll("months");
+  const bk = vkey(M.building);
+  S.months = all.map(m => ({ id: m.id, building: m.building, period: m.period, n: (m.rows || []).length }));
+  S.prior = all.filter(m => m.id !== M.id && vkey(m.building) === bk && String(m.period) < String(M.period)).sort((a,b) => b.period.localeCompare(a.period));
+  S._deltaCache = new Map();
+  const al = await dbGet("kv", "alias|" + vkey(M.building)).catch(() => null);
+  S.alias = (al && al.v) || {};
+  await loadJobs(M.building);
+  autoAssignJobs();
+  $("hdrctx").textContent = M.building + " — " + moLabel(M.period);
+  show("review");
+  renderTable();
+  renderRight();
+  loadPdf(id);
+}
+function visibleIdx(){
+  return S.M.rows.map((r,i) => i).filter(i => {
+    const r = S.M.rows[i];
+    if (S.filter === "open") return !r.status;
+    if (S.filter === "flag") return r.status === "question" || r.status === "hold";
+    return true;
+  });
+}
+function setFilter(f){
+  S.filter = f;
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === f));
+  const vis = visibleIdx();
+  if (vis.length && !vis.includes(S.sel)) S.sel = vis[0];
+  renderTable(); renderRight();
+}
+function vendorTotals(rows){
+  const t = {};
+  rows.forEach(r => { const k = vkey(r.vendor); t[k] = (t[k] || 0) + r.amount; });
+  return t;
+}
+/* total billed by one vendor on a set of rows, or null if the vendor isn't there */
+function vendorSum(rows, name){
+  let t = null;
+  (rows || []).forEach(r => { if (sameVendor(r.vendor, name)) t = (t || 0) + r.amount; });
+  return t;
+}
+function rowDelta(row){
+  if (!S.prior.length) return null;
+  if (!S._deltaCache) S._deltaCache = new Map();
+  const ck = vkeyFull(row.vendor);
+  if (S._deltaCache.has(ck)) return S._deltaCache.get(ck);
+  const nowT = vendorSum(S.M.rows, row.vendor);
+  let out = { prev: null };
+  for (const mo of S.prior){
+    const pt = vendorSum(mo.rows, row.vendor);
+    if (pt !== null){ out = { prev: pt, period: mo.period, pct: pt ? Math.round((nowT - pt) / Math.abs(pt) * 100) : null }; break; }
+  }
+  S._deltaCache.set(ck, out);
+  return out;
+}
+function renderTable(){
+  const body = $("revbody");
+  const vis = visibleIdx();
+  body.innerHTML = vis.map(i => {
+    const r = S.M.rows[i];
+    let tag = "";
+    if (r.jobId){
+      tag = ' <span title="Tracked as a job — progress shown on the right" style="font-size:11px">🏗</span>';
+    } else {
+      const d = rowDelta(r);
+      if (d && d.prev === null) tag = ' <span class="tag-new">new</span>';
+      else if (d && d.pct !== null && d.pct !== 0) tag = ' <span class="'+(d.pct > 0 ? "delta-up" : "delta-dn")+'">'+(d.pct > 0 ? "+" : "")+d.pct+'%</span>';
+    }
+    const dupe = dupeMsgs(r, i);
+    const noteCls = r.status === "question" ? "note-q" : "note-h";
+    return '<tr class="'+(r.status ? "st-"+r.status : "")+(i === S.sel ? " sel" : "")+'" onclick="selectRow('+i+')">'
+      + '<td>'+esc(r.vendor)+(dupe.length ? ' <span title="'+esc(dupe[0])+'" style="color:var(--red)">⧉</span>' : "")+((r.pages && r.pages.length > 1) ? ' <span title="This line has '+r.pages.length+' backup pages" style="font-size:10.5px;color:var(--tx2);background:#efede6;border-radius:8px;padding:0 6px;white-space:nowrap">📎'+r.pages.length+'</span>' : '')+'</td>'
+      + '<td class="rowmeta">'+esc(r.inv)+'</td><td class="rowmeta">'+esc(r.date)+'</td>'
+      + '<td style="text-align:right;font-weight:500;white-space:nowrap">$'+fmt(r.amount)+tag+'</td>'
+      + '<td class="desc-cell rowmeta" title="'+esc(r.desc)+'">'+esc(r.desc)+'</td>'
+      + '<td class="'+noteCls+'" style="font-size:12px">'+esc(r.note)+'</td></tr>';
+  }).join("");
+  const done = S.M.rows.filter(r => r.status).length;
+  $("hdrprog").textContent = done + " of " + S.M.rows.length + " reviewed";
+}
+function dupeMsgs(row, idx){
+  const msgs = [];
+  const iv = normInv(row.inv);
+  if (iv){
+    S.M.rows.forEach((r, j) => { if (j !== idx && normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor)) msgs.push("Invoice #" + row.inv + " appears twice on this month's aging."); });
+    for (const mo of S.prior){
+      const hit = (mo.rows || []).find(r => normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor));
+      if (hit){
+        let m = "Also on the " + moLabel(mo.period) + " aging ($" + fmt(hit.amount) + ")";
+        if (hit.status) m += " — you marked it \"" + hit.status + "\"" + (hit.note ? ": “" + hit.note + "”" : "");
+        msgs.push(m);
+        break;
+      }
+    }
+  } else {
+    for (const mo of S.prior){
+      const hit = (mo.rows || []).find(r => sameVendor(r.vendor, row.vendor) && r.amount === row.amount && r.date === row.date);
+      if (hit){ msgs.push("Same vendor, amount and date as a line on the " + moLabel(mo.period) + " aging."); break; }
+    }
+  }
+  return [...new Set(msgs)];
+}
+function toggleHistAll(){ S.histAll = !S.histAll; renderRight(); }
+function selectRow(i){
+  if (i !== S.sel) S.histAll = false;
+  S.sel = i;
+  renderTable(); renderRight();
+  const r = S.M.rows[i];
+  if (S.pdf){
+    const pg = (r.pages && r.pages.length) ? r.pages[0] : null;
+    /* Only move the invoice view when this line actually has a page linked.
+       Plenty of lines have no invoice of their own (payroll, for one), and
+       jumping them to a neighbour's page just shows the wrong bill. When
+       nothing is linked the view stays put and offers a guess instead. */
+    S.pdfGuess = null;
+    if (pg == null){
+      let g = null;
+      for (let j = i - 1; j >= 0; j--){
+        const pj = S.M.rows[j].pages;
+        if (pj && pj.length){ g = pj[pj.length - 1] + (i - j); break; }
+      }
+      if (g == null){
+        for (let j = i + 1; j < S.M.rows.length; j++){
+          const pj = S.M.rows[j].pages;
+          if (pj && pj.length){ g = pj[0] - (j - i); break; }
+        }
+      }
+      /* Nothing anywhere to anchor to (auto-match has not run, or matched
+         nothing): a backup PDF is normally assembled in aging order, so the
+         line's own position is the best guess available. */
+      if (g == null && !S.M.rows.some(x => x.pages && x.pages.length)) g = i;
+      if (g != null && g >= 0 && g < (S.pdfPages || 0)) S.pdfGuess = g;
+      /* Do NOT move the view to the guess. Following it meant every click on
+         an unmatched line landed on a page near the right one but not it,
+         which reads as the app sending you somewhere random on every click
+         and is worse than not moving at all. The guess is offered as a
+         button instead, so going there is a decision, not a surprise. */
+    } else if (pg + 1 !== S.pdfPageNum){
+      S.pdfPageNum = pg + 1; renderPdf();
+    }
+    renderPgLinks();
+  }
+  const tr = document.querySelector("#revbody tr.sel");
+  if (tr) tr.scrollIntoView({ block: "nearest" });
+}
+function renderRight(){
+  const r = S.M.rows[S.sel];
+  if (!r){ $("selhead").innerHTML = '<span class="muted">No rows</span>'; return; }
+  $("selhead").innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+    + '<div><b>'+esc(r.vendor)+'</b><div class="rowmeta">'+esc([r.inv && ("#" + r.inv), r.date, r.gl].filter(Boolean).join(" · "))+'</div></div>'
+    + '<div style="text-align:right"><div style="font-size:20px;font-weight:600;white-space:nowrap">$'+fmt(r.amount)+'</div>'
+    + (r.base != null ? '<div class="rowmeta" style="white-space:nowrap">$'+fmt(r.base)+(r.hst != null ? ' + $'+fmt(r.hst)+' tax' : '')+'</div>' : '') + '</div></div>'
+    + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "");
+  S._histRefs = [];
+  const cells = [];
+  const seenH = new Set();
+  let past = [];
+  const aliases = new Set();
+  const curInv = normInv(r.inv);
+  [...S.prior].reverse().forEach(mo => {
+    (mo.rows || []).forEach(x => {
+      if (!sameVendor(x.vendor, r.vendor)) return;
+      /* The same still-unpaid invoice carried onto an earlier aging isn't a past
+         bill — it's this same one. Everything else is real history, including a
+         recurring bill that happens to repeat the same amount. */
+      const xInv = normInv(x.inv);
+      if (curInv && xInv && xInv === curInv) return;
+      if (!curInv && !xInv && x.amount === r.amount && String(x.date || "") === String(r.date || "")) return;
+      const hk = mo.id + "|" + xInv + "|" + x.amount + "|" + (x.date || "");
+      if (seenH.has(hk)) return;
+      seenH.add(hk);
+      if (vkeyFull(x.vendor) !== vkeyFull(r.vendor)) aliases.add(x.vendor);
+      past.push({ mo: mo, x: x });
+    });
+  });
+  /* Several lines from this vendor on this month's aging? Give each line its
+     own slice of the history instead of showing all of them the same strip. */
+  const sibs = S.M.rows.filter(x => sameVendor(x.vendor, r.vendor));
+  let splitNote = "", splitAll = past.length;
+  if (sibs.length > 1 && past.length && !S.histAll){
+    const mySig = lineSig(r);
+    const sigHits = mySig ? past.filter(pi => lineSig(pi.x) === mySig) : [];
+    const otherSigs = sibs.filter(x => x !== r).map(lineSig);
+    if (sigHits.length && mySig && otherSigs.indexOf(mySig) < 0){
+      past = sigHits;
+      splitNote = "matched to this account";
+    } else {
+      const mine = sibs.indexOf(r);
+      const near = past.filter(pi => {
+        let best = -1, bd = Infinity;
+        sibs.forEach((sb, i) => {
+          const d = Math.abs(sb.amount - pi.x.amount) / Math.max(Math.abs(sb.amount), 1);
+          if (d < bd - 1e-9){ bd = d; best = i; }
+        });
+        return best === mine;
+      });
+      if (near.length && near.length < past.length){
+        past = near;
+        splitNote = "closest match by amount — check the account number";
+      } else {
+        splitNote = "can't tell the " + sibs.length + " lines apart";
+      }
+    }
+  }
+  past.forEach(pi => {
+    const mo = pi.mo, x = pi.x;
+    const refIdx = S._histRefs.length;
+    S._histRefs.push({ monthId: mo.id, period: mo.period, vendor: x.vendor, inv: x.inv, amount: x.amount, pages: x.pages || (x.page != null ? [x.page] : []) });
+    cells.push('<div class="histcell" style="cursor:pointer" title="'+esc(x.vendor + (x.inv ? " · #"+x.inv : "") + (x.desc ? " · " + x.desc : "") + " — click to see this invoice")+'" onclick="viewOldInvoice('+refIdx+')"><div class="m">'+moLabel(mo.period)+'</div><div>$'+fmt(x.amount)+'</div><div class="m" style="color:var(--blue)">view ↗</div></div>');
+  });
+  const shown = cells.slice(-10);
+  shown.push('<div class="histcell now"><div class="m">'+moLabel(S.M.period)+'</div><div><b>$'+fmt(r.amount)+'</b></div><div class="m">this bill</div></div>');
+  let head = "";
+  if (past.length){
+    const lastAmt = past[past.length - 1].x.amount;
+    const avg = past.reduce((t, pi) => t + pi.x.amount, 0) / past.length;
+    const pct = lastAmt ? Math.round((r.amount - lastAmt) / Math.abs(lastAmt) * 100) : null;
+    head = '<div class="small muted" style="margin-bottom:4px">'+esc(r.vendor)+' — '+past.length+' earlier bill'+(past.length > 1 ? "s" : "")+' on file'
+      + (cells.length > shown.length - 1 ? ' (last '+(shown.length - 1)+' shown)' : '')
+      + '. Click one to open its invoice.'
+      + (aliases.size ? ' <span title="'+esc([...aliases].join(" · "))+'">Also billed as “'+esc([...aliases][0])+'”.</span>' : '')
+      + (sibs.length > 1 ? ' <b style="color:var(--orange)">'+sibs.length+' '+esc(r.vendor)+' lines this month'+(splitNote ? " — " + esc(splitNote) : "")+'.</b> <a href="#" onclick="toggleHistAll();return false">'+(S.histAll ? "show just this line" : "show all "+splitAll+" from this vendor")+'</a>' : '')
+      + '</div>'
+      + '<div class="small" style="margin-bottom:4px">Last time (' + moLabel(past[past.length - 1].mo.period) + '): <b>$'+fmt(lastAmt)+'</b>'
+      + (pct === null ? '' : ' · this one is <b class="'+(pct > 0 ? "delta-up" : "delta-dn")+'">'+(pct > 0 ? "+" : "")+pct+'%</b>')
+      + ' · average of the '+past.length+': <b>$'+fmt(avg)+'</b></div>';
+  } else if (!S.prior.length){
+    /* Nothing earlier on file. Which of the several reasons is it? Say so
+       outright rather than leaving an empty strip. */
+    const all = S.months || [];
+    const bk = vkey(S.M.building);
+    const mine = all.filter(m => vkey(m.building) === bk && m.id !== S.M.id);
+    const others = [];
+    all.forEach(m => { if (vkey(m.building) !== bk && !others.some(o => o.b === m.building)) others.push({ b: m.building, n: all.filter(x => x.building === m.building).length }); });
+    head = '<div class="small muted" style="margin-bottom:4px">Nothing earlier on file for <b>'+esc(S.M.building)+'</b> — this package is dated '+moLabel(S.M.period)+', and past bills are taken from packages dated before it.';
+    if (S.readonly){
+      head += ' This is the read-only shared view, which does not carry earlier months — open the package from your own home screen to see them.';
+    } else if (mine.length){
+      head += ' There '+(mine.length === 1 ? 'is 1 other package' : 'are ' + mine.length + ' other packages')+' for this building ('
+        + esc(mine.slice(0,4).map(m => moLabel(m.period)).join(", ")) + '), but none is dated earlier. If the date on this package is wrong, delete it from the home screen and re-import with the right date.';
+    } else {
+      head += ' No other package for this building has been imported yet.';
+      if (others.length) head += ' Buildings you do have: ' + esc(others.slice(0,5).map(o => o.b + " (" + o.n + ")").join(", ")) + '. If one of those is this same building under a different name, re-import under the same name and the history lines up.';
+      else head += ' Add last month\'s package from the home screen (＋ New month) and past bills appear here automatically.';
+    }
+    head += '</div>';
+  } else {
+    const ms = S.prior.slice(0, 4).map(mo => moLabel(mo.period)).join(", ");
+    /* Probably the same vendor under a different name? Offer to link them. */
+    const cand = new Map();
+    S.prior.forEach(mo => (mo.rows || []).forEach(x => {
+      if (!x.vendor || sameVendor(x.vendor, r.vendor)) return;
+      const sc = vendorSimilar(x.vendor, r.vendor);
+      if (sc >= 0.4 && (!cand.has(x.vendor) || cand.get(x.vendor) < sc)) cand.set(x.vendor, sc);
+    }));
+    S._aliasSug = [...cand.entries()].sort((a,b) => b[1] - a[1]).slice(0, 3).map(e => e[0]);
+    head = '<div class="small muted" style="margin-bottom:4px">First time '+esc(r.vendor)+' appears — no bill from this vendor on the '+S.prior.length+' earlier aging'+(S.prior.length > 1 ? "s" : "")+' on file ('+esc(ms)+(S.prior.length > 4 ? ", …" : "")+').</div>'
+      + (S._aliasSug.length && !S.readonly
+          ? '<div class="small" style="margin-bottom:4px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:6px 10px">Did you bill this one under a different name? '
+            + S._aliasSug.map((v, j) => '<a href="#" onclick="linkVendorAlias('+j+');return false" title="Treat these as the same vendor from now on">'+esc(v)+'</a>').join(" · ")
+            + ' <span class="muted">— click to link them for this building.</span></div>'
+          : '<div class="small muted" style="margin-bottom:4px">If you expected one, check the spelling of the vendor name on the older aging.</div>');
+  }
+  $("hist").innerHTML = head + '<div class="histstrip">'+shown.join("")+'</div>';
+  renderJob(r);
+  const dupe = dupeMsgs(r, S.sel);
+  $("dupebox").innerHTML = dupe.map(m => {
+    const info = /you marked|Also on/i.test(m) && !/twice/i.test(m);
+    return '<div class="'+(info ? "info" : "warn")+'">'+(info ? "ℹ️ " : "⚠️ ")+esc(m)+'</div>';
+  }).join("");
+  $("bApp").classList.toggle("on", r.status === "approved");
+  $("bQ").classList.toggle("on", r.status === "question");
+  $("bHold").classList.toggle("on", r.status === "hold");
+  if (document.activeElement !== $("noteinp")) $("noteinp").value = r.note || "";
+  renderPgLinks();
+}
+function renderPgLinks(){
+  updatePop();
+  const r = S.M && S.M.rows[S.sel];
+  if (S.pdf){
+    const on = r && r.pages && r.pages.includes(S.pdfPageNum - 1);
+    $("pglabel").innerHTML = S.pdfPageNum + " / " + S.pdfPages + (on ? ' <span style="color:var(--green)">📎</span>' : "");
+  }
+  const pl = $("pglinks");
+  if (!pl) return;
+  if (!r || !S.pdf){ pl.innerHTML = ""; return; }
+  const ps = r.pages || [];
+  if (!ps.length){
+    /* Say plainly that nothing matched and stay put, rather than moving the
+       view to a guess and calling it a match. */
+    let msg = '<b>No page matched this line.</b> Flip with ◀ ▶ to find its invoice and click <b>📎 Link page to row</b> — that is remembered.'
+      + (S.pdfGuess != null ? ' <button style="padding:1px 9px;font-size:12px" onclick="gotoPage(' + S.pdfGuess + ')" title="Backup is usually filed in aging order, so the invoice is often near here">↦ try page ' + (S.pdfGuess + 1) + '</button>' : '')
+      + ' <button style="padding:1px 9px;font-size:12px" onclick="whyNoPage()" title="Show what was searched for and where each part was found">🔍 why?</button>';
+    if (S.ocrRunning) msg = '<span style="color:var(--blue)">⏳ Still reading the backup PDF (progress below) — pages link themselves when it finishes.</span>';
+    else if (!S.hasOcr) msg += ' <button style="padding:1px 9px;font-size:12px" onclick="runOcr(true)">✨ Read the PDF and link them all</button>';
+    pl.innerHTML = S.readonly ? "" : msg;
+    return;
+  }
+  const cur = S.pdfPageNum - 1;
+  const pos = ps.indexOf(cur);
+  pl.innerHTML = '📎 <b style="color:var(--tx)">' + ps.length + ' backup' + (ps.length > 1 ? "s" : "") + '</b> for this line'
+    + (ps.length > 1 ? (pos >= 0 ? ' — viewing ' + (pos + 1) + ' of ' + ps.length : ' — click to view each') : '')
+    + ': ' + ps.map((p, j) => '<button style="padding:1px 9px;font-size:12px;margin-right:4px;' + (p === cur ? 'border-color:var(--blue);color:var(--blue);font-weight:600;background:var(--blue-bg);' : '') + '" onclick="gotoPage(' + p + ')" title="Go to PDF page ' + (p + 1) + '">' + (j + 1) + '</button>').join("")
+    + (S.readonly ? "" : ' <button style="padding:1px 9px;font-size:12px" onclick="clearPageLinks()" title="Forget these pages for this line and go back to guessing">✕ wrong page</button>');
+}
+/* What the matcher looked for on this line and where each part turned up.
+   Guessing at why a page did not match from the outside is hopeless — this
+   reads the same text the matcher reads and shows it. */
+function whyNoPage(){
+  const r = S.M && S.M.rows[S.sel];
+  const t = S.texts;
+  if (!r) return;
+  if (!t || !t.length){
+    $("pglinks").innerHTML = '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+      + '<b>The backup PDF has not been read yet on this build.</b><div style="margin-top:4px">'
+      + (S.ocrRunning ? 'It is being read right now — the progress line is below. Try again when it finishes.'
+                      : 'Press <b>✨ Auto-match pages</b> to read it, then press why? again.')
+      + '</div><div style="margin-top:5px"><a href="#" onclick="renderPgLinks();return false">close</a></div></div>';
+    return;
+  }
+  const nd = rowNeedles(r);
+  const sp = t.map(x => " " + (x || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
+  const st = t.map(x => " " + String(x || "").toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join(" ") + " ");
+  const nm = t.map(x => " " + (x || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
+  const pgs = n => n.length ? n.map(q => '<button style="padding:0 7px;font-size:12px;margin-right:3px" onclick="gotoPage(' + q + ')">' + (q + 1) + '</button>').join("") : '<span style="color:var(--red)">not on any page</span>';
+  const find = list => { const o = []; for (let q = 0; q < sp.length; q++) if (q !== S.M.summaryPage && list.some(x => sp[q].indexOf(" " + x + " ") >= 0 || st[q].indexOf(" " + x + " ") >= 0)) o.push(q); return o; };
+  const invAll = nd.inv.concat(nd.invAlt);
+  const vHits = [];
+  for (let q = 0; q < t.length; q++) if (q !== S.M.summaryPage && vendorHit(nd.vt, pageWords(t[q])) >= 0.8) vHits.push(q);
+  const aHits = [];
+  for (let q = 0; q < nm.length; q++) if (q !== S.M.summaryPage && nm[q].indexOf(" " + nd.amt + " ") >= 0) aHits.push(q);
+  const blank = t.filter(x => !x || x.replace(/[^a-z0-9]/gi, "").length < 24).length;
+  const row = (lab, what, hits) => '<tr><td style="padding:2px 8px 2px 0;white-space:nowrap">' + lab + '</td>'
+    + '<td style="padding:2px 8px 2px 0;font-family:monospace;font-size:11.5px">' + esc(what) + '</td>'
+    + '<td style="padding:2px 0">' + pgs(hits) + '</td></tr>';
+  $("pglinks").innerHTML =
+    '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+    + '<b>What was searched for on this line</b>'
+    + '<table style="margin-top:4px;border-collapse:collapse">'
+    + row("Invoice no.", invAll.length ? invAll.join("  ") : "(none on the aging)", find(invAll))
+    + row("Vendor", nd.vt.join(" ") || "(none)", vHits)
+    + row("Amount", nd.amt, aHits)
+    + '</table>'
+    + (blank ? '<div style="margin-top:5px;color:var(--red)">' + blank + ' of ' + t.length + ' pages came back with no readable text — those pages cannot be matched on anything.</div>' : '')
+    + '<div style="margin-top:5px" class="small">A page has to carry at least one of these to be linked. If the invoice is plainly there and none of the three was found, the page did not read — tell me the page number.</div>'
+    + '<div style="margin-top:5px"><a href="#" onclick="renderPgLinks();return false">close</a></div></div>';
+}
+function priorInvoicesHtml(k){
+  const items = [];
+  S.prior.forEach(mo => mo.rows.forEach(r => { if (vkey(r.vendor) === k) items.push({ p: mo.period, ...r }); }));
+  if (!items.length) return "";
+  const rows = items.slice(0, 6).map(it =>
+    '<tr><td class="rowmeta">'+moLabel(it.p)+'</td><td class="rowmeta">'+esc(it.inv)+'</td><td style="text-align:right">$'+fmt(it.amount)+'</td><td class="rowmeta desc-cell" style="max-width:150px" title="'+esc(it.desc)+'">'+esc(it.desc)+'</td></tr>').join("");
+  return '<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Past invoices from this vendor ('+items.length+')</summary>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px">'+rows+'</table></details>';
+}
+
+function act(status){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  if (r.status === status){ r.status = null; renderTable(); renderRight(); saveSoon(); return; }
+  r.status = status;
+  if (status === "approved"){
+    renderTable(); renderRight(); saveSoon();
+    const vis = visibleIdx();
+    const pos = vis.indexOf(S.sel);
+    if (pos >= 0 && pos < vis.length - 1) selectRow(vis[pos + 1]);
+  } else {
+    renderTable(); renderRight(); saveSoon();
+    $("noteinp").focus();
+  }
+}
+function noteChanged(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.note = $("noteinp").value;
+  if (r.note && !r.status) r.status = "question";
+  renderTable();
+  $("bApp").classList.toggle("on", r.status === "approved");
+  $("bQ").classList.toggle("on", r.status === "question");
+  $("bHold").classList.toggle("on", r.status === "hold");
+  saveSoon();
+}
+function applyPrevDecisions(){
+  let n = 0;
+  S.M.rows.forEach(row => {
+    if (row.status) return;
+    const iv = normInv(row.inv);
+    if (!iv) return;
+    for (const mo of S.prior){
+      const hit = (mo.rows || []).find(r => normInv(r.inv) === iv && sameVendor(r.vendor, row.vendor) && r.amount === row.amount && r.status);
+      if (hit){ row.status = hit.status; row.note = hit.note; n++; break; }
+    }
+  });
+  renderTable(); renderRight(); saveSoon();
+  toast(n ? "Copied your earlier decisions onto " + n + " carried-over invoice" + (n > 1 ? "s" : "") : "No carried-over invoices with earlier decisions found.");
+}
+/* A change is written to this browser the instant it is made, and to the
+   server a moment later. The local copy is what makes a change survive:
+   saving to the server is a network round trip, and a browser does not wait
+   for one when a tab is closed — so a page you linked and then closed the
+   tab on was simply gone. localStorage.setItem finishes before the tab dies.
+   The copy is cleared as soon as the server has the change, so one is only
+   ever left behind when a save did not get through. */
+function journalKey(id){ return "draft|" + id; }
+function journal(){
+  if (!S.M) return;
+  try{ localStorage.setItem(journalKey(S.M.id), JSON.stringify(S.M)); }
+  catch(e){ /* private mode, or out of room — the server save still runs */ }
+}
+function saveSoon(){
+  if (S.readonly || !S.M) return;
+  S.M.savedAt = Date.now();
+  journal();
+  clearTimeout(S.saveTimer);
+  S.saveTimer = setTimeout(saveNow, 400);
+}
+async function saveNow(){
+  if (S.readonly) return;
+  clearTimeout(S.saveTimer);
+  /* Deliberately not conditioned on still being on the review screen. It
+     used to be, so a change made in the last fraction of a second before
+     leaving that screen fired its timer, found the screen had moved on, and
+     dropped the save without a word. */
+  const M = S.M;
+  if (!M) return;
+  M.savedAt = Date.now();
+  journal();
+  try{
+    await dbPut("months", M);
+    try{ localStorage.removeItem(journalKey(M.id)); }catch(e){}
+  }
+  catch(e){ toast("Couldn't save to the server — your change is held on this computer and will go up next time you open this month."); }
+}
+
+/* ---------- jobs / projects (contract tracking for contractors) ---------- */
+async function loadJobs(building){
+  const rec = await dbGet("kv", "jobs|" + vkey(building)).catch(() => null);
+  S.jobs = (rec && rec.v) || [];
+}
+function saveJobs(){
+  if (!S.M) return;
+  dbPut("kv", { k: "jobs|" + vkey(S.M.building), v: S.jobs }).catch(() => {});
+}
+function invBase(inv){
+  const s = String(inv || "").trim();
+  const m = s.match(/^(.*?)[-_ ]?\d+$/);
+  const b = (m ? m[1] : s).replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return b.length >= 3 ? b : "";
+}
+function jobInvoices(jobId){
+  const seen = new Map();
+  [...S.prior, S.M].forEach(mo => (mo.rows || []).forEach(r => {
+    if (r.jobId === jobId){
+      const key = vkey(r.vendor) + "|" + (normInv(r.inv) || (r.amount + "|" + r.date));
+      const e = seen.get(key);
+      const pgs = r.pages || (r.page != null ? [r.page] : []);
+      if (!e) seen.set(key, { inv: r.inv, amount: r.amount, desc: r.desc, period: mo.period, monthId: mo.id, vendor: r.vendor, pages: pgs });
+      else { e.period = mo.period; e.monthId = mo.id; if (pgs.length) e.pages = pgs; }
+    }
+  }));
+  return [...seen.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
+}
+function autoAssignJobs(){
+  const baseMap = new Map();
+  [...S.prior, S.M].forEach(mo => (mo.rows || []).forEach(r => {
+    if (r.jobId){ const b = invBase(r.inv); if (b && !baseMap.has(b)) baseMap.set(b, { jobId: r.jobId, vendor: vkey(r.vendor) }); }
+  }));
+  let changed = false;
+  S.M.rows.forEach(r => {
+    if (!r.jobId){
+      const b = invBase(r.inv);
+      const hit = b && baseMap.get(b);
+      if (hit && hit.vendor === vkey(r.vendor) && S.jobs.some(j => j.id === hit.jobId)){ r.jobId = hit.jobId; changed = true; }
+    }
+  });
+  if (changed) saveSoon();
+}
+function renderJob(r){
+  const el = $("jobbox");
+  if (!el) return;
+  if (!S.jobs) S.jobs = [];
+  if (r.jobId){
+    const j = S.jobs.find(x => x.id === r.jobId);
+    if (!j){ if (!S.readonly) r.jobId = null; el.innerHTML = ""; return; }
+    const invs = jobInvoices(j.id);
+    const billed = invs.reduce((s, x) => s + x.amount, 0);
+    el.innerHTML = '<div style="background:var(--blue-bg);border:1px solid #c3d8ee;border-radius:6px;padding:8px 11px;font-size:12.5px">'
+      + '🏗 <b>' + esc(j.name) + '</b>'
+      + (S.readonly ? (j.budget ? ' · contract $' + fmt(j.budget) : '') : ' · <a href="#" onclick="editJobBudget(\'' + j.id + '\');return false">' + (j.budget ? 'contract $' + fmt(j.budget) : 'set contract total') + '</a>')
+      + '<div style="margin-top:4px">Billed so far on this job: <b>$' + fmt(billed) + '</b> (' + invs.length + ' invoice' + (invs.length > 1 ? 's' : '') + ', incl. this one)'
+      + (j.budget ? ' — ' + Math.round(billed / j.budget * 100) + '% of contract, $' + fmt(Math.max(j.budget - billed, 0)) + ' left' : '') + '</div>'
+      + (j.budget && billed > j.budget + 0.005 ? '<div style="color:var(--red);margin-top:2px">⚠️ Billing has passed the contract total by $' + fmt(billed - j.budget) + '</div>' : '')
+      + '<div style="margin-top:4px">' + invs.map(x => {
+          const isCur = normInv(x.inv) === normInv(r.inv) && x.amount === r.amount;
+          if (isCur) return '<span style="margin-right:10px;white-space:nowrap;font-weight:600">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>';
+          if (!S._histRefs) S._histRefs = [];
+          const refIdx = S._histRefs.length;
+          S._histRefs.push({ monthId: x.monthId, period: x.period, vendor: x.vendor || r.vendor, inv: x.inv, amount: x.amount, pages: x.pages || [] });
+          return '<span style="margin-right:10px;white-space:nowrap;cursor:pointer;text-decoration:underline" title="Click to see this invoice" onclick="viewOldInvoice(' + refIdx + ')">' + moLabel(x.period) + ': $' + fmt(x.amount) + '</span>';
+        }).join("") + '</div>'
+      + (S.readonly ? '' : '<div style="margin-top:4px" class="small"><a href="#" onclick="unassignJob();return false">remove from job</a></div>')
+      + '</div>';
+    return;
+  }
+  if (S.readonly){ el.innerHTML = ""; return; }
+  const vendorJobs = S.jobs.filter(j => j.vendor === vkey(r.vendor));
+  const b = invBase(r.inv);
+  let suggested = null;
+  if (b){
+    outer:
+    for (const mo of [...S.prior, S.M]){
+      for (const x of (mo.rows || [])){
+        if (x.jobId && vkey(x.vendor) === vkey(r.vendor) && invBase(x.inv) === b){
+          suggested = S.jobs.find(jj => jj.id === x.jobId) || null;
+          if (suggested) break outer;
+        }
+      }
+    }
+  }
+  el.innerHTML = '<div class="small muted" style="margin:2px 0">'
+    + (suggested ? '🏗 Looks like part of <b style="color:var(--tx)">' + esc(suggested.name) + '</b> <button style="padding:1px 8px;font-size:12px" onclick="assignJob(\'' + suggested.id + '\')">Link it</button> · ' : '🏗 ')
+    + (vendorJobs.length ? '<select id="jobsel" style="height:26px;font-size:12px;max-width:180px">' + vendorJobs.map(j => '<option value="' + j.id + '">' + esc(j.name) + '</option>').join("") + '</select> <button style="padding:1px 8px;font-size:12px" onclick="assignJob(document.getElementById(\'jobsel\').value)">Add to job</button> · ' : '')
+    + '<a href="#" onclick="newJob();return false">track as a job/project</a></div>';
+}
+function assignJob(id){
+  const r = S.M.rows[S.sel];
+  if (!r || !id) return;
+  r.jobId = id;
+  saveSoon(); renderRight(); renderTable();
+}
+function unassignJob(){
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.jobId = null;
+  saveSoon(); renderRight(); renderTable();
+}
+function newJob(){
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  const name = (prompt("Name this job/project (e.g. Suite 240 renovation):", (r.desc || "").slice(0, 40)) || "").trim();
+  if (!name) return;
+  const bud = toNum(prompt("Contract / quoted total for this job (optional — leave blank if unknown):") || "");
+  const j = { id: "j" + Date.now().toString(36), vendor: vkey(r.vendor), name, budget: bud || null };
+  S.jobs.push(j);
+  saveJobs();
+  r.jobId = j.id;
+  saveSoon(); renderRight(); renderTable();
+}
+function editJobBudget(id){
+  const j = S.jobs.find(x => x.id === id);
+  if (!j) return;
+  const bud = toNum(prompt("Contract / quoted total for “" + j.name + "”:", j.budget || "") || "");
+  j.budget = bud || null;
+  saveJobs(); renderRight();
+}
+
+/* ---------- old-invoice overlay viewer ---------- */
+const OV = { doc: null, page: 1, pages: [] };
+async function viewOldInvoice(idx){
+  const ref = S._histRefs && S._histRefs[idx];
+  if (!ref) return;
+  try{
+    toast("Loading that invoice…");
+    const rec = await dbGet("pdfs", ref.monthId);
+    if (!rec || !rec.blob){ toast("No backup PDF is attached to the " + moLabel(ref.period) + " package."); return; }
+    await ensureWorker();
+    const buf = await rec.blob.arrayBuffer();
+    OV.doc = await pdfjsLib.getDocument({ data: buf }).promise;
+    OV.pages = ref.pages || [];
+    OV.page = Math.min((OV.pages.length ? OV.pages[0] : 0) + 1, OV.doc.numPages);
+    $("ovinfo").textContent = ref.vendor + " — " + moLabel(ref.period) + " · $" + fmt(ref.amount) + (ref.inv ? " · #" + ref.inv : "") + (OV.pages.length ? "" : " (no page linked — flip with ◀ ▶)");
+    $("oldview").classList.remove("hidden");
+    renderOV();
+  } catch(err){ toast("Couldn't open it: " + err.message); }
+}
+async function renderOV(){
+  if (!OV.doc) return;
+  const page = await OV.doc.getPage(OV.page);
+  const wrap = $("ovwrap");
+  const dpr = window.devicePixelRatio || 1;
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.max(Math.min((wrap.clientWidth - 40) / base.width, 1.6), 0.3) * dpr;
+  const vp = page.getViewport({ scale });
+  const c = $("ovcanvas");
+  c.width = vp.width; c.height = vp.height;
+  c.style.width = (vp.width / dpr) + "px";
+  c.style.height = (vp.height / dpr) + "px";
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  $("ovpg").textContent = OV.page + " / " + OV.doc.numPages + (OV.pages.includes(OV.page - 1) ? " 📎" : "");
+}
+function closeOV(){ $("oldview").classList.add("hidden"); OV.doc = null; }
+document.getElementById("ovprev").onclick = () => { if (OV.doc && OV.page > 1){ OV.page--; renderOV(); } };
+document.getElementById("ovnext").onclick = () => { if (OV.doc && OV.page < OV.doc.numPages){ OV.page++; renderOV(); } };
+document.getElementById("ovclose").onclick = closeOV;
+
+/* ---------- PDF viewer ---------- */
+async function ensureWorker(){
+  if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc){
+    try{
+      const wjs = await fetch("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js").then(r => r.text());
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([wjs], { type: "text/javascript" }));
+    } catch(e){
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  }
+}
+function retryPdf(){ if (S.M) loadPdf(S.M.id); }
+async function loadPdf(id){
+  S.pdf = null; S.pdfPageNum = 1; S.pdfPages = 0;
+  $("pglabel").textContent = "– / –";
+  $("nopdf").classList.add("hidden");
+  const rec = await dbGet("pdfs", id).catch(() => null);
+  if (!rec){
+    /* "No PDF attached" and "the PDF is attached but would not download" look
+       identical from here, and they need opposite responses. Check the record. */
+    const meta = await dbGet("kv", "pdfmeta|" + id).catch(() => null);
+    const attached = !!(meta && meta.v && meta.v.exists);
+    $("nopdfmsg").textContent = attached
+      ? "This package has a backup PDF (" + (meta.v.name || "PDF") + "), but it couldn't be downloaded just now — usually a connection problem. Try again, or re-attach the file."
+      : "No backup PDF attached to this package.";
+    $("btnPdfRetry").classList.toggle("hidden", !attached);
+    $("pdfcanvas").classList.add("hidden"); $("nopdf").classList.remove("hidden"); $("btnOcr").disabled = true;
+    return;
+  }
+  $("btnOcr").disabled = false;
+  $("pdfcanvas").classList.remove("hidden");
+  try{
+    await ensureWorker();
+    const buf = await rec.blob.arrayBuffer();
+    S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    S.pdfPages = S.pdf.numPages;
+    const first = S.M.rows[S.sel];
+    if (first && first.pages && first.pages.length) S.pdfPageNum = first.pages[0] + 1;
+    pdfFit();
+    const fresh = !!rec.ocr && rec.ocrVer === TEXT_VER;
+    S.hasOcr = fresh; S.texts = fresh ? rec.ocr : null;
+    if (!fresh && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
+      S.ocrAuto[id] = 1;
+      toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
+      runOcr();
+    } else if (fresh && !S.readonly){
+      /* Fill in the lines that have no page yet. Never clear the ones that
+         do. Bumping the matcher version used to wipe every automatic link in
+         the package and rebuild it from scratch on open, so a month that had
+         been matched correctly — and checked by hand — could come back worse
+         with no way back to what it had. Rebuilding everything is now only
+         what the Auto-match button does, because that is someone asking for
+         it. */
+      if (S.M.rows.some(r => !r.pages || !r.pages.length)){
+        const k = autoMatch(S.M.rows, rec.ocr, S.M.summaryPage);
+        if (k) toast("Linked " + k + " more line" + (k > 1 ? "s" : "") + " to an invoice page.");
+      }
+      S.M.matchVer = MATCH_VER;
+      saveSoon(); renderTable();
+    }
+  } catch(err){
+    toast("Couldn't open the PDF: " + err.message);
+  }
+}
+async function renderPdf(){
+  if (!S.pdf) return;
+  const page = await S.pdf.getPage(S.pdfPageNum);
+  const usePop = S.pop && !S.pop.closed;
+  const wrap = usePop ? S.pop.document.getElementById("pwrap") : $("pdfwrap");
+  const c = usePop ? S.pop.document.getElementById("pcanvas") : $("pdfcanvas");
+  if (!wrap || !c) return;
+  const dpr = (usePop ? S.pop.devicePixelRatio : window.devicePixelRatio) || 1;
+  const base = page.getViewport({ scale: 1 });
+  S.fitScale = (wrap.clientWidth - 24) / base.width;
+  const scale = S.fitScale * S.zoom * dpr;
+  const vp = page.getViewport({ scale });
+  c.width = vp.width; c.height = vp.height;
+  c.style.width = (vp.width / dpr) + "px";
+  c.style.height = (vp.height / dpr) + "px";
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  renderPgLinks();
+}
+function popOut(){
+  if (S.pop && !S.pop.closed){
+    S.pop.close(); S.pop = null;
+    $("pdfwrap").style.display = "";
+    $("btnPop").textContent = "🗗 Second window";
+    renderPdf();
+    return;
+  }
+  const w = window.open("", "apreview_pdf", "width=950,height=1050");
+  if (!w){ toast("Your browser blocked the pop-up — allow pop-ups for this site and try again."); return; }
+  const d = w.document;
+  d.open();
+  d.write('<!DOCTYPE html><html><head><title>Invoice backup</title></head>'
+    + '<body style="margin:0;background:#6f6d67;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">'
+    + '<div style="position:sticky;top:0;z-index:2;background:#1a1a18;color:#fff;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    + '<span id="pinfo" style="font-weight:600"></span>'
+    + '<span style="flex:1"></span>'
+    + '<button id="pprev">◀</button><span id="ppg" style="min-width:60px;text-align:center"></span><button id="pnext">▶</button>'
+    + '<button id="pzo">−</button><button id="pzi">+</button><button id="pfit">Fit</button><button id="plink">📎 Link</button>'
+    + '<span style="font-size:11px;opacity:.75">↑↓ lines · ←→ pages · A/Q/H mark</span>'
+    + '</div>'
+    + '<div id="pwrap" style="overflow:auto;height:calc(100vh - 40px);text-align:center"><canvas id="pcanvas" style="margin:10px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.4)"></canvas></div>'
+    + '</body></html>');
+  d.close();
+  d.querySelectorAll("button").forEach(b => { b.style.cssText += ";font:inherit;padding:3px 10px;border-radius:5px;border:1px solid #555;background:#2e2e2b;color:#fff;cursor:pointer"; });
+  d.getElementById("pprev").onclick = () => pdfPage(-1);
+  d.getElementById("pnext").onclick = () => pdfPage(1);
+  d.getElementById("pzo").onclick = () => pdfZoom(-1);
+  d.getElementById("pzi").onclick = () => pdfZoom(1);
+  d.getElementById("pfit").onclick = () => pdfFit();
+  d.getElementById("plink").onclick = () => linkPage();
+  d.addEventListener("keydown", reviewKeydown);
+  w.addEventListener("beforeunload", () => {
+    S.pop = null;
+    const pw = $("pdfwrap"); if (pw) pw.style.display = "";
+    const bp = $("btnPop"); if (bp) bp.textContent = "🗗 Second window";
+    setTimeout(() => { if (S.screen === "review") renderPdf(); }, 100);
+  });
+  S.pop = w;
+  $("pdfwrap").style.display = "none";
+  $("btnPop").textContent = "🗕 Bring viewer back";
+  renderPdf();
+  toast("Drag the new window to your other screen — it follows along as you click lines here.");
+}
+function updatePop(){
+  if (!S.pop || S.pop.closed) return;
+  const d = S.pop.document;
+  const r = S.M && S.M.rows[S.sel];
+  const stLab = { approved: "✓ approved", question: "? question", hold: "⏸ on hold" };
+  const info = d.getElementById("pinfo");
+  if (info) info.textContent = r ? (r.vendor + " — $" + fmt(r.amount) + (r.status ? " · " + stLab[r.status] : "")) : "";
+  const pg = d.getElementById("ppg");
+  if (pg) pg.textContent = S.pdfPageNum + " / " + S.pdfPages + ((r && r.pages && r.pages.includes(S.pdfPageNum - 1)) ? " 📎" : "");
+}
+function togglePdfMax(){
+  document.body.classList.toggle("pdfmax");
+  const on = document.body.classList.contains("pdfmax");
+  $("btnMax").textContent = on ? "⤢ Back to table" : "⛶ Bigger";
+  renderPdf();
+}
+function pdfPage(d){ if (!S.pdf) return; S.pdfPageNum = Math.min(Math.max(1, S.pdfPageNum + d), S.pdfPages); renderPdf(); }
+function pdfZoom(d){ S.zoom = Math.min(Math.max(0.5, S.zoom + d * 0.25), 4); renderPdf(); }
+function pdfFit(){ S.zoom = 1; renderPdf(); }
+function linkPage(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r || !S.pdf) return;
+  if (!r.pages) r.pages = [];
+  const p = S.pdfPageNum - 1;
+  const ix = r.pages.indexOf(p);
+  if (ix >= 0){ r.pages.splice(ix, 1); toast("Page " + S.pdfPageNum + " unlinked from " + r.vendor); }
+  else { r.pages.push(p); r.pages.sort((a, b) => a - b); r.pageManual = true; toast("Page " + S.pdfPageNum + " linked to " + r.vendor + (r.pages.length > 1 ? " (" + r.pages.length + " pages)" : "")); }
+  r.page = r.pages.length ? r.pages[0] : null;
+  saveSoon(); renderPdf(); renderRight();
+}
+function clearPageLinks(){
+  if (S.readonly) return;
+  const r = S.M.rows[S.sel];
+  if (!r) return;
+  r.pages = []; r.page = null; r.pageManual = false;
+  saveSoon(); renderTable(); renderRight(); selectRow(S.sel);
+  toast("Cleared the pages linked to " + r.vendor + ".");
+}
+function gotoPage(p){
+  if (!S.pdf) return;
+  S.pdfPageNum = p + 1;
+  renderPdf();
+}
+
+/* ---------- reading the backup PDF ---------- */
+/* Bumped when the way pages are read changes, so a package whose text was
+   captured the old way is re-read instead of keeping the worse text. */
+const TEXT_VER = 3;
+/* Backup packages are nearly always built from the PDFs vendors emailed, so
+   the words are already in the file and getTextContent() hands them over
+   exactly and instantly. Only pages that come back empty are real scans, and
+   those are the only ones worth OCR. Reading all 60 pages through Tesseract
+   took minutes and still misread the very things the matcher looks for —
+   invoice numbers and amounts, where 0/O, 1/l and 5/S are a coin toss — and a
+   single wrong character means no match at all, which is why a freshly
+   imported package could come back with nothing linked. `prev` is whatever
+   text we captured last time; its pages are reused for the scans so an
+   existing package does not have to sit through OCR a second time. */
+async function pageTexts(prev, onProgress){
+  const out = [];
+  const scans = [];
+  for (let p = 1; p <= S.pdfPages; p++){
+    let t = "";
+    try{
+      const page = await S.pdf.getPage(p);
+      const tc = await page.getTextContent();
+      t = tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+    } catch(e){ t = ""; }
+    /* Keep both readings of the page rather than letting one replace the
+       other. The text layer is exact where it exists and OCR covers the
+       scans, and matching only needs whichever of them carries the invoice
+       number. Swapping in the text layer threw signal away: a scanned page
+       with a thin text layer on it — a stamp, a page number, a fax header —
+       looked readable, so the real OCR text of that page was dropped and
+       every line that depended on it stopped matching. */
+    const had = (prev && prev[p - 1]) || "";
+    if (!had && t.replace(/[^a-z0-9]/gi, "").length < 24) scans.push(p);
+    t = had && had !== t ? (t + " \n " + had) : t;
+    out.push(t);
+    if (onProgress) onProgress("Reading page " + p + " of " + S.pdfPages + "…");
+  }
+  if (!scans.length) return out;
+  if (!window.Tesseract){
+    if (onProgress) onProgress("Loading the text-reading engine for " + scans.length + " scanned page" + (scans.length > 1 ? "s" : "") + "…");
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+      s.onload = res; s.onerror = () => rej(new Error("couldn't load Tesseract"));
+      document.head.appendChild(s);
+    });
+  }
+  const worker = await Tesseract.createWorker("eng");
+  try{
+    for (let k = 0; k < scans.length; k++){
+      const p = scans[k];
+      if (onProgress) onProgress("Reading scanned page " + p + " (" + (k + 1) + " of " + scans.length + ")… this part is slow, but it is saved afterwards");
+      const page = await S.pdf.getPage(p);
+      const vp = page.getViewport({ scale: 2 });
+      const c = document.createElement("canvas");
+      c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      const { data } = await worker.recognize(c);
+      out[p - 1] = (out[p - 1] ? out[p - 1] + " \n " : "") + (data.text || "");
+    }
+  } finally { await worker.terminate(); }
+  return out;
+}
+async function runOcr(rebuild){
+  if (!S.pdf || S.ocrRunning) return;
+  S.ocrRunning = true;
+  const rec = await dbGet("pdfs", S.M.id).catch(() => null);
+  let texts = rec && rec.ocrVer === TEXT_VER ? rec.ocr : null;
+  if (!texts){
+    $("btnOcr").disabled = true;
+    try{
+      texts = await pageTexts(rec && rec.ocr, m => { $("ocrbar").textContent = m; });
+      if (rec) await dbPut("pdfs", { id: rec.id, name: rec.name, ocr: texts, ocrVer: TEXT_VER });
+    } catch(err){
+      $("ocrbar").textContent = "";
+      $("btnOcr").disabled = false;
+      S.ocrRunning = false;
+      return toast("Auto-match failed: " + err.message);
+    }
+  }
+  S.hasOcr = true; S.texts = texts;
+  /* Only when someone presses Auto-match: drop the links this matcher made
+     last time so the re-run can correct them. Anything linked by hand stays,
+     and the background read never gets here — it fills gaps only. */
+  if (rebuild) S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
+  const n = autoMatch(S.M.rows, texts, S.M.summaryPage);
+  S.M.matchVer = MATCH_VER;
+  saveSoon(); renderPdf(); renderTable();
+  $("ocrbar").textContent = "";
+  $("btnOcr").disabled = false;
+  S.ocrRunning = false;
+  const tot = S.M.rows.filter(r => r.pages && r.pages.length).length;
+  toast(rebuild
+    ? "Re-matched: " + tot + " of " + S.M.rows.length + " lines now have an invoice page. Use 📎 to fix any that are off."
+    : "Linked " + n + " more line" + (n === 1 ? "" : "s") + " — " + tot + " of " + S.M.rows.length + " lines have an invoice page.");
+  selectRow(S.sel);
+}
+
+/* ---------- matching aging lines to backup pages ---------- */
+/* Bumped whenever autoMatch changes. Links carry the version that made them,
+   so a package linked by an older, buggier matcher is rebuilt on open instead
+   of keeping wrong pages until someone thinks to press Auto-match. */
+const MATCH_VER = 7;
+/* The page's words, squashed the same way vendor names are (legal suffixes
+   dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
+   on the aging and on its invoice. */
+function pageWords(t){
+  const out = new Set();
+  String(t || "").toLowerCase().split(/[^a-z0-9]+/).forEach(w => {
+    if (w && !_VSTOP[w]) out.add(_VABBR[w] || w);
+  });
+  return out;
+}
+/* How much of the vendor's name is on the page, 0 to 1. The first word has to
+   be there: "Crescent Centre Plumbing" must not count a page whose only word
+   in common is "centre". The first word counts however short it is — dropping
+   it for being under three letters left "TK Elevator" matching in full on any
+   page with the word "elevator", so the TK line landed on an Amazon invoice
+   for elevator supplies. */
+function vendorHit(vt, words){
+  if (!vt.length || !words.size || !words.has(vt[0])) return 0;
+  const sig = vt.filter((t, i) => i === 0 || t.length >= 3);
+  let hit = 0;
+  sig.forEach(t => { if (words.has(t)) hit++; });
+  /* a one- or two-letter name with nothing after it is too thin to link on */
+  if (sig.length === 1 && vt[0].length < 3) return 0.5;
+  return hit / sig.length;
+}
+/* Everything about one aging line that might be printed on its invoice.
+   `inv` holds forms of the complete number, `invAlt` the leading piece of a
+   number the aging has stapled something onto — worth less, since it is a
+   guess at where the number stops. */
+function rowNeedles(r){
+  const raw = String(r.inv || "").trim();
+  const iv = normInv(raw);
+  const inv = [], invAlt = [];
+  const add = (arr, v) => {
+    const t = String(v).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (t.length >= 4 && inv.indexOf(t) < 0 && invAlt.indexOf(t) < 0) arr.push(t);
+  };
+  add(inv, iv);
+  /* Accounting systems pad: "INV-0004821" on the aging prints as "4821".
+     Only where the digits form a single run, though: scraped out of
+     "1JHH-YHW7-1C7G" they give "1717", which nobody printed anywhere and
+     which matches whatever page happens to carry those four digits. */
+  const digits = raw.replace(/\D/g, "");
+  if ((raw.match(/\d+/g) || []).length === 1){
+    add(inv, digits);
+    add(inv, digits.replace(/^0+/, ""));
+  }
+  /* And they staple things on: "148252-09/09/2026" is invoice 148252, billed
+     on the 9th. Squashed whole it is a 14-digit number that appears on no
+     page at all, so without the leading piece the strongest signal a line has
+     is silently lost and it falls back to matching on the amount — which is
+     how a line landed on somebody else's invoice that happened to carry the
+     same figure. Only the leading piece, since the number comes first, and
+     never a bare year, which would match every page in the package. */
+  const parts = raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (parts.length > 1 && !/^(19|20)\d\d$/.test(parts[0])) add(invAlt, parts[0]);
+  return { iv, inv, invAlt, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor) };
+}
+/* A line and a page are scored on the three things an invoice shows: its
+   number, its total, and whose invoice it is. Matching on the number or the
+   amount alone — all the old matcher could do — fails a building the first
+   time it is imported, because the aging's invoice numbers are truncated by
+   the accounting system and its amounts are open balances that differ from
+   the invoice total wherever anything was part-paid or credited. The vendor
+   name is on every invoice and survives both, so it carries a line the other
+   two drop. MIN is set so a number (6) or an amount (4) still stands on its
+   own, and so does a vendor name that matches in full (5). */
+const MATCH_MIN = 4;
+function autoMatch(rows, texts, skip){
+  const N = texts.length;
+  const sq = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
+  const sp = texts.map(t => " " + (t || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
+  /* amounts as whole numbers, so 113.07 is not found inside 2113.07 */
+  const nm = texts.map(t => " " + (t || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
+  const pw = texts.map(pageWords);
+  /* Invoice numbers are printed with separators inside them — "216-6563",
+     "INV-0004821", "#009283". Splitting a page on every non-letter leaves
+     "216" and "6563" as two separate words, so the aging's "216-6563" —
+     squashed to 2166563 to compare — matched nothing at all. Squashing each
+     whitespace-separated chunk instead keeps the number whole, while still
+     comparing whole chunks so it cannot match inside a longer number. */
+  const st = texts.map(t => " " + String(t || "").toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join(" ") + " ");
+
+  const claimed = new Set();
+  const byInv = new Map();
+  rows.forEach(r => {
+    if (!r.pages) r.pages = (r.page != null ? [r.page] : []);
+    r.pages.forEach(p => claimed.add(p));
+    const iv0 = normInv(r.inv);
+    if (iv0 && r.pages.length) byInv.set(iv0, r.pages.slice());
+  });
+
+  let n = 0;
+  /* One invoice split across several aging lines (two Amazon lines on one
+     invoice, say) is one piece of backup. Without this the second line finds
+     its page already claimed, falls through to matching on amount, and lands
+     on somebody else's invoice. Run before scoring so those lines do not take
+     a page of their own, and again at the end to catch the pairs whose first
+     line was the one matched. */
+  const sameAsPrev = (idx, m) => m > 0 && normInv(rows[idx[m]].inv) && normInv(rows[idx[m]].inv) === normInv(rows[idx[m-1]].inv);
+  const shareSplit = () => {
+    rows.forEach(r => {
+      if (r.pages.length) return;
+      const iv = normInv(r.inv);
+      if (iv && byInv.has(iv)){ r.pages = byInv.get(iv).slice(); r.page = r.pages[0]; n++; }
+    });
+  };
+  shareSplit();
+
+  const open = [];
+  rows.forEach((r, i) => { if (!r.pages.length) open.push(i); });
+  const need = new Map();
+  open.forEach(i => need.set(i, rowNeedles(rows[i])));
+
+  /* Match the invoice number as a whole word. The old code looked for it as
+     a bare substring of the page with every separator stripped, so a short
+     number turned up inside an account number or a total on an unrelated
+     page and the line was linked to somebody else's invoice. */
+  const onPage = (list, q) => list.some(x => sp[q].indexOf(" " + x + " ") >= 0 || st[q].indexOf(" " + x + " ") >= 0);
+  const invHit = (nd, q) => onPage(nd.inv, q);
+
+  /* Pages carrying some line's invoice number: where one invoice ends and the
+     next begins, so a multi-page invoice does not swallow the one after it. */
+  const invOwner = new Array(N).fill(-1);
+  open.forEach(i => {
+    const nd = need.get(i);
+    if (!nd.inv.length) return;
+    for (let q = 0; q < N; q++){ if (q !== skip && invHit(nd, q)) invOwner[q] = invOwner[q] === -1 ? i : -2; }
+  });
+  /* How much of each line's vendor is on each page, worked out up front so a
+     page can also be asked whether it announces somebody else. */
+  const vhm = open.map(i => {
+    const vt = need.get(i).vt, row = new Float64Array(N);
+    for (let q = 0; q < N; q++) row[q] = vendorHit(vt, pw[q]);
+    return row;
+  });
+  const named = new Uint8Array(N);
+  vhm.forEach(row => { for (let q = 0; q < N; q++) if (row[q] >= 0.8) named[q] = 1; });
+
+  const scoreAt = (k, i, q) => {
+    if (q === skip || claimed.has(q)) return 0;
+    const nd = need.get(i);
+    const vh = vhm[k][q];
+    let s = 0;
+    if (invHit(nd, q)) s += 6;
+    else if (onPage(nd.invAlt, q)) s += 5;                         // a stapled-on number
+    else if (nd.iv.length >= 6 && sq[q].includes(nd.iv)) s += 5;   // long numbers only
+    const amtExact = nm[q].indexOf(" " + nd.amt + " ") >= 0;
+    if (amtExact) s += 4;
+    else if (sq[q].includes(nd.amt)) s += 2;                       // looser, as a nudge
+    /* An amount on its own is the weakest thing we match on — aging amounts
+       are open balances, and in a package of sixty invoices two totals
+       colliding is ordinary. So it is not enough on a page that plainly
+       belongs to someone else: one that names another line's vendor in full,
+       or carries another line's invoice number. Those lines stay unlinked and
+       fall to the "guessing page N" prompt, which is honest, rather than
+       opening the wrong vendor's bill. */
+    if (!s || (!vh && s <= 4)){
+      if (named[q] && !vh) return 0;
+      if (invOwner[q] !== -1 && invOwner[q] !== i) return 0;
+    }
+    return s + vh * 5;
+  };
+
+  /* Which line each page looks most like, so no line walks off with a page
+     another line matches better. */
+  const cand = new Map();
+  const top = new Array(N).fill(0), topRow = new Array(N).fill(-1), tied = new Array(N).fill(false);
+  open.forEach((i, k) => {
+    const list = [];
+    for (let q = 0; q < N; q++){
+      const s = scoreAt(k, i, q);
+      if (s < MATCH_MIN) continue;
+      list.push({ p: q, s });
+      if (s > top[q]){ top[q] = s; topRow[q] = i; tied[q] = false; }
+      else if (s === top[q]) tied[q] = true;
+    }
+    list.sort((a, b) => b.s - a.s || a.p - b.p);
+    cand.set(i, list);
+  });
+
+  /* The alignment has already weighed this line against every other; assign
+     what it decided rather than putting the run back through take()'s
+     tie-breaking, which is there for the unordered fallback below. */
+  const assign = (i, pages) => {
+    const r = rows[i];
+    r.pages = pages.slice(); r.page = pages[0];
+    pages.forEach(q => claimed.add(q));
+    const iv = normInv(r.inv);
+    if (iv) byInv.set(iv, pages.slice());
+    n++;
+  };
+  const take = (i, p, list) => {
+    const r = rows[i];
+    const scored = new Set(list.map(c => c.p));
+    const pages = [p];
+    /* carry on over a multi-page invoice, but stop at the next one */
+    for (let q = p + 1; q < N && pages.length < 12; q++){
+      if (claimed.has(q) || q === skip || !scored.has(q)) break;
+      if (invOwner[q] !== -1 && invOwner[q] !== i) break;
+      if (topRow[q] !== i || tied[q]) break;
+      pages.push(q);
+    }
+    r.pages = pages; r.page = pages[0];
+    pages.forEach(q => claimed.add(q));
+    const iv = normInv(r.inv);
+    if (iv) byInv.set(iv, pages.slice());
+    n++;
+  };
+
+  /* The backup is filed in the same order as the aging — that is how the
+     manager assembles it — and that ordering is worth more than any single
+     piece of text on a page. It says line 3's invoice comes after line 2's
+     and before line 4's, which is a fact about every line at once, including
+     the ones whose own page reads badly. Matching each line independently
+     threw all of it away, so a line could land forty pages from where its
+     neighbours sat. Lines are now aligned to pages in order: the run of
+     pages each line takes must start after the previous line's, and a line
+     may take none (payroll and management recoveries have no invoice) while
+     a page may belong to none (dividers, statements, continuation sheets). */
+  const kOf = new Map(); open.forEach((i, k) => kOf.set(i, k));
+  const SIG = open.map((i, k) => { const v = new Float64Array(N); for (let q = 0; q < N; q++) v[q] = scoreAt(k, i, q); return v; });
+  const sigAt = (i, q) => { const k = kOf.get(i); return k == null ? 0 : SIG[k][q]; };
+
+  /* Costs are set so a page with real evidence is always worth taking, and a
+     page with none is not: skipping a line costs less than claiming a page
+     that says nothing about it. */
+  const TAKE_COST = 0.8, LINE_SKIP = 0.4, PAGE_SKIP = 0.3, MAXK = 6;
+  function alignSeg(idx, lo, hi){
+    const R = idx.length, P = hi - lo + 1;
+    if (R <= 0 || P <= 0) return new Array(Math.max(R, 0)).fill(null);
+    const NEG = -1e9;
+    const best = [], back = [];
+    for (let i = 0; i <= R; i++){ best.push(new Float64Array(P + 1).fill(NEG)); back.push(new Array(P + 1).fill(null)); }
+    for (let p = 0; p <= P; p++) best[R][p] = -PAGE_SKIP * (P - p);
+    for (let i = R - 1; i >= 0; i--){
+      for (let p = P; p >= 0; p--){
+        let bs = best[i + 1][p] - LINE_SKIP, bk = { k: 0, np: p };   // this line has no backup
+        if (p < P){
+          const alt = best[i][p + 1] - PAGE_SKIP;                    // this page belongs to no line
+          if (alt > bs){ bs = alt; bk = { k: -1, np: p + 1 }; }
+          let run = 0;
+          const lead = sigAt(idx[i], lo + p);
+          for (let k = 1; k <= MAXK && p + k <= P; k++){
+            const sv = sigAt(idx[i], lo + p + k - 1);
+            /* An invoice opens with its invoice page; the sheets behind it
+               say less, not more. A page carrying more evidence than the one
+               the run started on is the next invoice, not a continuation of
+               this one — without this the arithmetic ties and a line can be
+               given a run that starts on somebody's terms-and-conditions
+               sheet and swallows the invoice after it. */
+            if (k > 1 && sv > lead) break;
+            run += sv - TAKE_COST;
+            const v = run + best[i + 1][p + k];
+            if (v > bs){ bs = v; bk = { k, np: p + k }; }
+          }
+        }
+        best[i][p] = bs; back[i][p] = bk;
+      }
+    }
+    const out = new Array(R).fill(null);
+    let i = 0, p = 0;
+    while (i < R && p <= P){
+      const b = back[i][p];
+      if (!b) break;
+      if (b.k === -1){ p = b.np; continue; }
+      if (b.k > 0){ const pg = []; for (let j = 0; j < b.k; j++) pg.push(lo + p + j); out[i] = pg; }
+      p = b.np; i++;
+    }
+    return out;
+  }
+
+  /* Lines already linked — by hand, or on an earlier run — are fixed points
+     the alignment works between, so a correction made by hand pins every
+     line after it as well. */
+  const segs = [];
+  let run = null;
+  rows.forEach((r, i) => {
+    if (r.pages.length){ if (run){ segs.push(run); run = null; } }
+    else { if (!run) run = []; run.push(i); }
+  });
+  if (run) segs.push(run);
+  const pageBefore = i => { for (let j = i - 1; j >= 0; j--) if (rows[j].pages.length) return rows[j].pages[rows[j].pages.length - 1]; return -1; };
+  const pageAfter  = i => { for (let j = i + 1; j < rows.length; j++) if (rows[j].pages.length) return rows[j].pages[0]; return N; };
+
+  segs.forEach(idx => {
+    const lo = pageBefore(idx[0]) + 1, hi = pageAfter(idx[idx.length - 1]) - 1;
+    const got = alignSeg(idx, lo, hi);
+    /* Keep what the page itself vouches for. */
+    const kept = new Array(idx.length).fill(false);
+    got.forEach((pg, n) => {
+      if (pg && sigAt(idx[n], pg[0]) >= MATCH_MIN){ kept[n] = true; }
+    });
+    /* Then fill the gaps between two of those, but only where the count
+       works out exactly — as many unplaced lines as unclaimed pages between
+       them. That is the manager's ordering doing the work: a line whose own
+       invoice reads badly is still pinned by the ones either side of it.
+       Where the count does not fit, something is missing or doubled and
+       guessing which would be worse than leaving it to be linked by hand. */
+    /* The edges only count as anchors when a real linked line sits beyond
+       them. Otherwise a stretch of aging with no evidence anywhere would be
+       dealt out one line per page just because the counts happened to tie —
+       which is guessing, and guessing is what put a line on the wrong bill
+       in the first place. */
+    const anchors = [{ n: -1, endPage: lo - 1, real: pageBefore(idx[0]) >= 0 }];
+    got.forEach((pg, m) => { if (kept[m]) anchors.push({ n: m, startPage: pg[0], endPage: pg[pg.length - 1], real: true }); });
+    anchors.push({ n: idx.length, startPage: hi + 1, real: pageAfter(idx[idx.length - 1]) < N });
+    for (let a = 0; a + 1 < anchors.length; a++){
+      const A = anchors[a], B = anchors[a + 1];
+      if (!A.real || !B.real) continue;
+      const holes = [];
+      for (let q = A.endPage + 1; q <= B.startPage - 1; q++) if (q !== skip && !claimed.has(q)) holes.push(q);
+      const want = [];
+      for (let m = A.n + 1; m < B.n; m++) if (!kept[m] && !sameAsPrev(idx, m)) want.push(m);
+      if (holes.length > 0 && holes.length === want.length){
+        want.forEach((m, j) => { got[m] = [holes[j]]; kept[m] = true; });
+      }
+    }
+    got.forEach((pg, m) => { if (kept[m] && pg) assign(idx[m], pg); });
+  });
+  /* A package that is NOT filed in aging order still gets matched: anything
+     the alignment left behind may take a page it plainly owns — strong
+     evidence, still free, and no other line matching it as well. Order is
+     the better signal wherever it holds, and this costs nothing where it
+     does not. */
+  open.forEach(i => {
+    if (rows[i].pages.length) return;
+    const k = kOf.get(i);
+    let bp = -1, bs = MATCH_MIN - 0.001;
+    for (let q = 0; q < N; q++){
+      if (claimed.has(q) || q === skip) continue;
+      if (SIG[k][q] > bs && topRow[q] === i && !tied[q]){ bs = SIG[k][q]; bp = q; }
+    }
+    if (bp >= 0) take(i, bp, [{ p: bp, s: bs }]);
+  });
+  shareSplit();
+  return n;
+}
+
+/* ---------- export ---------- */
+/*XL-START*/
+async function buildWorkbook(M){
+  const wb = new ExcelJS.Workbook();
+  const GREEN = "FFC6EFCE", GREENTX = "FF1F6D3B", ORANGE = "FFFFDDA8", ORANGETX = "FF8A4B08", RED = "FFC00000";
+  const ws = wb.addWorksheet("Aging review");
+  ws.columns = [
+    { header: "Vendor", key: "vendor", width: 32 },
+    { header: "Invoice #", key: "inv", width: 16 },
+    { header: "Invoice date", key: "date", width: 12 },
+    { header: "Account", key: "gl", width: 26 },
+    { header: "Description", key: "desc", width: 40 },
+    { header: "Amount", key: "base", width: 12, style: { numFmt: '#,##0.00' } },
+    { header: "HST/tax", key: "hst", width: 10, style: { numFmt: '#,##0.00' } },
+    { header: "Total", key: "amount", width: 13, style: { numFmt: '#,##0.00' } },
+    { header: "Status", key: "status", width: 12 },
+    { header: "Notes / questions", key: "note", width: 46 },
+  ];
+  ws.spliceRows(1, 0, [M.building + " — payables review — " + moLabel(M.period)], []);
+  ws.getRow(1).font = { bold: true, size: 13 };
+  const hdr = ws.getRow(3);
+  hdr.font = { bold: true };
+  hdr.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEEE8" } }; c.border = { bottom: { style: "thin" } }; });
+  const stLabel = { approved: "Approved", question: "Question", hold: "On hold" };
+  M.rows.forEach(r => {
+    const row = ws.addRow({ vendor: r.vendor, inv: r.inv, date: r.date, gl: r.gl, desc: r.desc, base: (r.base == null ? null : r.base), hst: (r.hst == null ? null : r.hst), amount: r.amount, status: stLabel[r.status] || "", note: r.note || "" });
+    if (r.status === "approved"){
+      row.eachCell({ includeEmpty: true }, c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } }; });
+      row.getCell("status").font = { color: { argb: GREENTX }, bold: true };
+    } else if (r.status === "hold"){
+      row.eachCell({ includeEmpty: true }, c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ORANGE } }; });
+      row.getCell("status").font = { color: { argb: ORANGETX }, bold: true };
+      row.getCell("note").font = { color: { argb: ORANGETX }, bold: true };
+    }
+    if (r.status === "question"){
+      row.getCell("note").font = { color: { argb: RED }, bold: true };
+      row.getCell("status").font = { color: { argb: RED }, bold: true };
+    }
+  });
+  const totRow = ws.addRow({ vendor: "Grand total", amount: M.rows.reduce((s,r) => s + r.amount, 0) });
+  totRow.font = { bold: true };
+  totRow.getCell("amount").numFmt = '#,##0.00';
+  totRow.eachCell({ includeEmpty: true }, c => { c.border = { top: { style: "thin" } }; });
+
+  const flagged = M.rows.filter(r => r.status === "question" || r.status === "hold");
+  if (flagged.length){
+    const ws2 = wb.addWorksheet("Open items");
+    ws2.columns = [
+      { header: "Vendor", key: "vendor", width: 32 },
+      { header: "Invoice #", key: "inv", width: 16 },
+      { header: "Amount", key: "amount", width: 13, style: { numFmt: '#,##0.00' } },
+      { header: "Status", key: "status", width: 12 },
+      { header: "Question / note", key: "note", width: 60 },
+    ];
+    ws2.getRow(1).font = { bold: true };
+    flagged.forEach(r => {
+      const row = ws2.addRow({ vendor: r.vendor, inv: r.inv, amount: r.amount, status: stLabel[r.status], note: r.note });
+      const col = r.status === "question" ? RED : ORANGETX;
+      row.getCell("note").font = { color: { argb: col }, bold: true };
+      row.getCell("status").font = { color: { argb: col }, bold: true };
+    });
+  }
+  return wb;
+}
+/*XL-END*/
+async function exportXlsx(){
+  await saveNow();
+  const wb = await buildWorkbook(S.M);
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = S.M.building + " - Review - " + S.M.period + ".xlsx";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Exported. Attach it to your email to the property manager.");
+}
+
+/* ---------- keyboard ---------- */
+function reviewKeydown(e){
+  if (S.screen !== "review") return;
+  const ovEl = $("oldview");
+  if (ovEl && !ovEl.classList.contains("hidden")){
+    if (e.key === "Escape") closeOV();
+    else if (e.key === "ArrowRight"){ if (OV.doc && OV.page < OV.doc.numPages){ OV.page++; renderOV(); } }
+    else if (e.key === "ArrowLeft"){ if (OV.doc && OV.page > 1){ OV.page--; renderOV(); } }
+    e.preventDefault();
+    return;
+  }
+  const doc = (e.view && e.view.document) || document;
+  const typing = /INPUT|TEXTAREA|SELECT/.test((doc.activeElement && doc.activeElement.tagName) || "");
+  if (e.key === "Escape" && typing){ doc.activeElement.blur(); return; }
+  if (typing) return;
+  const vis = visibleIdx();
+  const pos = vis.indexOf(S.sel);
+  if (e.key === "ArrowDown"){ e.preventDefault(); if (pos < vis.length - 1) selectRow(vis[pos + 1]); }
+  else if (e.key === "ArrowUp"){ e.preventDefault(); if (pos > 0) selectRow(vis[pos - 1]); }
+  else if (e.key === "ArrowRight"){ e.preventDefault(); pdfPage(1); }
+  else if (e.key === "ArrowLeft"){ e.preventDefault(); pdfPage(-1); }
+  else if (e.key === "a" || e.key === "A"){ act("approved"); }
+  else if (e.key === "q" || e.key === "Q"){ act("question"); }
+  else if (e.key === "h" || e.key === "H"){ act("hold"); }
+  else if (e.key === "l" || e.key === "L"){ linkPage(); }
+}
+document.addEventListener("keydown", reviewKeydown);
+window.addEventListener("resize", () => { if (S.screen === "review" && S.pdf) renderPdf(); });
+window.addEventListener("beforeunload", () => { if (S.M){ journal(); saveNow(); } if (S.pop && !S.pop.closed) S.pop.close(); });
+/* Closing a laptop or switching apps on a phone often never fires
+   beforeunload at all; this one does. */
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && S.M && !S.readonly){ journal(); saveNow(); } });
+
+boot();
+</script>
+</body>
+</html>
