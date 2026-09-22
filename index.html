@@ -219,7 +219,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
         <button id="btnMax" onclick="togglePdfMax()" title="Hide the table so the invoice fills the screen — arrows and A/Q/H still work">⛶ Bigger</button>
         <button id="btnPop" onclick="popOut()" title="Open the invoice in its own window — drag it to your second screen; it follows along as you click lines">🗗 Second window</button>
         <button id="btnLink" onclick="linkPage()" title="Remember that this PDF page belongs to the selected line">📎 Link page to row</button>
-        <button id="btnOcr" onclick="runOcr()" title="Reads the scanned pages and automatically links each line to its invoice page">✨ Auto-match pages</button>
+        <button id="btnOcr" onclick="runOcr()" title="Reads the backup PDF and links each line to its invoice page, by invoice number, amount and vendor name">✨ Auto-match pages</button>
       </div>
       <div id="ocrbar"></div>
       <div id="pdfwrap"><canvas id="pdfcanvas"></canvas><div id="nopdf" class="hidden" style="color:#fff;padding:40px 20px"><span id="nopdfmsg">No backup PDF attached to this package.</span><br><br><button onclick="document.getElementById('fLatePdf').click()">＋ Add the backup PDF</button> <button id="btnPdfRetry" class="hidden" onclick="retryPdf()">Try again</button><input type="file" id="fLatePdf" accept=".pdf" class="hidden"></div></div>
@@ -294,7 +294,7 @@ async function dbGet(st, key){
       if (error) return undefined;
       _pdfBlobCache[key] = data;
     }
-    return { id: key, blob: _pdfBlobCache[key], name: meta.v.name || "", ocr: meta.v.ocr || null };
+    return { id: key, blob: _pdfBlobCache[key], name: meta.v.name || "", ocr: meta.v.ocr || null, ocrVer: meta.v.ocrVer || 1 };
   }
   const { data, error } = await sb.from("kv").select("*").eq("k", key).maybeSingle();
   if (error) throw error;
@@ -315,7 +315,9 @@ async function dbPut(st, v){
       _pdfBlobCache[v.id] = v.blob;
     }
     const prev = await dbGet("kv", "pdfmeta|" + v.id);
-    await dbPut("kv", { k: "pdfmeta|" + v.id, v: { exists: true, name: v.name || (prev && prev.v && prev.v.name) || "", ocr: v.ocr || (prev && prev.v && prev.v.ocr) || null } });
+    const keepOcr = v.ocr || (prev && prev.v && prev.v.ocr) || null;
+    const keepVer = v.ocr ? (v.ocrVer || 1) : (prev && prev.v && prev.v.ocrVer) || 1;
+    await dbPut("kv", { k: "pdfmeta|" + v.id, v: { exists: true, name: v.name || (prev && prev.v && prev.v.name) || "", ocr: keepOcr, ocrVer: keepVer } });
     return;
   }
   const { error } = await sb.from("kv").upsert(v);
@@ -1691,12 +1693,13 @@ async function loadPdf(id){
     const first = S.M.rows[S.sel];
     if (first && first.pages && first.pages.length) S.pdfPageNum = first.pages[0] + 1;
     pdfFit();
-    S.hasOcr = !!rec.ocr;
-    if (!rec.ocr && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
+    const fresh = !!rec.ocr && rec.ocrVer === TEXT_VER;
+    S.hasOcr = fresh;
+    if (!fresh && !S.ocrAuto[id] && S.M.rows.some(r => !r.pages || !r.pages.length)){
       S.ocrAuto[id] = 1;
       toast("Reading the PDF in the background so pages follow you automatically — keep reviewing meanwhile.");
       runOcr();
-    } else if (rec.ocr){
+    } else if (fresh){
       if (S.M.matchVer !== MATCH_VER && !S.readonly){
         S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
         const k = autoMatch(S.M.rows, rec.ocr, S.M.summaryPage);
@@ -1821,39 +1824,74 @@ function gotoPage(p){
   renderPdf();
 }
 
-/* ---------- OCR auto-match ---------- */
+/* ---------- reading the backup PDF ---------- */
+/* Bumped when the way pages are read changes, so a package whose text was
+   captured the old way is re-read instead of keeping the worse text. */
+const TEXT_VER = 2;
+/* Backup packages are nearly always built from the PDFs vendors emailed, so
+   the words are already in the file and getTextContent() hands them over
+   exactly and instantly. Only pages that come back empty are real scans, and
+   those are the only ones worth OCR. Reading all 60 pages through Tesseract
+   took minutes and still misread the very things the matcher looks for —
+   invoice numbers and amounts, where 0/O, 1/l and 5/S are a coin toss — and a
+   single wrong character means no match at all, which is why a freshly
+   imported package could come back with nothing linked. `prev` is whatever
+   text we captured last time; its pages are reused for the scans so an
+   existing package does not have to sit through OCR a second time. */
+async function pageTexts(prev, onProgress){
+  const out = [];
+  const scans = [];
+  for (let p = 1; p <= S.pdfPages; p++){
+    let t = "";
+    try{
+      const page = await S.pdf.getPage(p);
+      const tc = await page.getTextContent();
+      t = tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+    } catch(e){ t = ""; }
+    /* a page carrying a few stray characters is a scan with a stamp on it */
+    if (t.replace(/[^a-z0-9]/gi, "").length < 24){
+      t = (prev && prev[p - 1]) || "";
+      if (!t) scans.push(p);
+    }
+    out.push(t);
+    if (onProgress) onProgress("Reading page " + p + " of " + S.pdfPages + "…");
+  }
+  if (!scans.length) return out;
+  if (!window.Tesseract){
+    if (onProgress) onProgress("Loading the text-reading engine for " + scans.length + " scanned page" + (scans.length > 1 ? "s" : "") + "…");
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+      s.onload = res; s.onerror = () => rej(new Error("couldn't load Tesseract"));
+      document.head.appendChild(s);
+    });
+  }
+  const worker = await Tesseract.createWorker("eng");
+  try{
+    for (let k = 0; k < scans.length; k++){
+      const p = scans[k];
+      if (onProgress) onProgress("Reading scanned page " + p + " (" + (k + 1) + " of " + scans.length + ")… this part is slow, but it is saved afterwards");
+      const page = await S.pdf.getPage(p);
+      const vp = page.getViewport({ scale: 2 });
+      const c = document.createElement("canvas");
+      c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      const { data } = await worker.recognize(c);
+      out[p - 1] = data.text || "";
+    }
+  } finally { await worker.terminate(); }
+  return out;
+}
 async function runOcr(){
   if (!S.pdf || S.ocrRunning) return;
   S.ocrRunning = true;
-  const rec = await dbGet("pdfs", S.M.id);
-  let texts = rec && rec.ocr;
+  const rec = await dbGet("pdfs", S.M.id).catch(() => null);
+  let texts = rec && rec.ocrVer === TEXT_VER ? rec.ocr : null;
   if (!texts){
     $("btnOcr").disabled = true;
     try{
-      if (!window.Tesseract){
-        $("ocrbar").textContent = "Loading the text-reading engine…";
-        await new Promise((res, rej) => {
-          const s = document.createElement("script");
-          s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
-          s.onload = res; s.onerror = () => rej(new Error("couldn't load Tesseract"));
-          document.head.appendChild(s);
-        });
-      }
-      const worker = await Tesseract.createWorker("eng");
-      texts = [];
-      for (let p = 1; p <= S.pdfPages; p++){
-        $("ocrbar").textContent = "Reading page " + p + " of " + S.pdfPages + "… (first run takes a couple of minutes; it's saved after that)";
-        const page = await S.pdf.getPage(p);
-        const vp = page.getViewport({ scale: 2 });
-        const c = document.createElement("canvas");
-        c.width = vp.width; c.height = vp.height;
-        await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-        const { data } = await worker.recognize(c);
-        texts.push(data.text || "");
-      }
-      await worker.terminate();
-      rec.ocr = texts;
-      await dbPut("pdfs", { id: rec.id, name: rec.name, ocr: texts });
+      texts = await pageTexts(rec && rec.ocr, m => { $("ocrbar").textContent = m; });
+      if (rec) await dbPut("pdfs", { id: rec.id, name: rec.name, ocr: texts, ocrVer: TEXT_VER });
     } catch(err){
       $("ocrbar").textContent = "";
       $("btnOcr").disabled = false;
@@ -1861,6 +1899,7 @@ async function runOcr(){
       return toast("Auto-match failed: " + err.message);
     }
   }
+  S.hasOcr = true;
   /* Drop the links this matcher made last time so a re-run can correct them;
      anything linked by hand stays. */
   S.M.rows.forEach(r => { if (!r.pageManual){ r.pages = []; r.page = null; } });
@@ -1873,26 +1912,63 @@ async function runOcr(){
   toast("Matched " + n + " of " + S.M.rows.length + " lines to PDF pages. Use 📎 to fix any that are off.");
   selectRow(S.sel);
 }
-/* Pick the page to use out of the pages that matched: one nobody has taken,
-   preferring the first at or after where the last line landed, since backup
-   PDFs run in the same order as the aging. */
+
+/* ---------- matching aging lines to backup pages ---------- */
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 3;
-function pickPage(hits, claimed, last){
-  const free = hits.filter(p => !claimed.has(p));
-  const fwd = free.filter(p => p >= last);
-  if (fwd.length) return fwd[0];
-  if (free.length) return free[0];
-  return null;
+const MATCH_VER = 4;
+/* The page's words, squashed the same way vendor names are (legal suffixes
+   dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
+   on the aging and on its invoice. */
+function pageWords(t){
+  const out = new Set();
+  String(t || "").toLowerCase().split(/[^a-z0-9]+/).forEach(w => {
+    if (w && !_VSTOP[w]) out.add(_VABBR[w] || w);
+  });
+  return out;
 }
+/* How much of the vendor's name is on the page, 0 to 1. The first word has to
+   be there: "Crescent Centre Plumbing" must not count a page whose only word
+   in common is "centre". */
+function vendorHit(vt, words){
+  if (!words.size) return 0;
+  const sig = vt.filter(t => t.length >= 3);
+  if (!sig.length || !words.has(sig[0])) return 0;
+  let hit = 0;
+  sig.forEach(t => { if (words.has(t)) hit++; });
+  return hit / sig.length;
+}
+/* Everything about one aging line that might be printed on its invoice. */
+function rowNeedles(r){
+  const iv = normInv(r.inv);
+  const digits = String(r.inv || "").replace(/\D/g, "");
+  const inv = [];
+  if (iv.length >= 4) inv.push(iv);
+  if (digits.length >= 4 && digits !== iv) inv.push(digits);
+  /* Accounting systems pad: "INV-0004821" on the aging prints as "4821". */
+  const bare = digits.replace(/^0+/, "");
+  if (bare.length >= 4 && inv.indexOf(bare) < 0) inv.push(bare);
+  return { iv, inv, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor) };
+}
+/* A line and a page are scored on the three things an invoice shows: its
+   number, its total, and whose invoice it is. Matching on the number or the
+   amount alone — all the old matcher could do — fails a building the first
+   time it is imported, because the aging's invoice numbers are truncated by
+   the accounting system and its amounts are open balances that differ from
+   the invoice total wherever anything was part-paid or credited. The vendor
+   name is on every invoice and survives both, so it carries a line the other
+   two drop. MIN is set so a number (6) or an amount (4) still stands on its
+   own, and so does a vendor name that matches in full (5). */
+const MATCH_MIN = 4;
 function autoMatch(rows, texts, skip){
+  const N = texts.length;
   const sq = texts.map(t => (t || "").toLowerCase().replace(/[^0-9a-z.]/g, ""));
   const sp = texts.map(t => " " + (t || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim() + " ");
   /* amounts as whole numbers, so 113.07 is not found inside 2113.07 */
   const nm = texts.map(t => " " + (t || "").replace(/,/g, "").replace(/[^0-9.]+/g, " ").trim() + " ");
-  let last = 0, n = 0;
+  const pw = texts.map(pageWords);
+
   const claimed = new Set();
   const byInv = new Map();
   rows.forEach(r => {
@@ -1901,58 +1977,110 @@ function autoMatch(rows, texts, skip){
     const iv0 = normInv(r.inv);
     if (iv0 && r.pages.length) byInv.set(iv0, r.pages.slice());
   });
-  rows.forEach(r => {
-    if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
-    const iv = normInv(r.inv);
-    /* One invoice split across several aging lines (two Amazon lines on one
-       invoice, say) is one piece of backup. Without this the second line finds
-       its page already claimed, falls through to matching on amount, and lands
-       on somebody else's invoice. */
-    if (iv && byInv.has(iv)){
-      r.pages = byInv.get(iv).slice();
-      r.page = r.pages[0];
-      last = r.pages[r.pages.length - 1]; n++;
-      return;
-    }
-    const digits = String(r.inv || "").replace(/\D/g, "");
+
+  let n = 0;
+  /* One invoice split across several aging lines (two Amazon lines on one
+     invoice, say) is one piece of backup. Without this the second line finds
+     its page already claimed, falls through to matching on amount, and lands
+     on somebody else's invoice. Run before scoring so those lines do not take
+     a page of their own, and again at the end to catch the pairs whose first
+     line was the one matched. */
+  const shareSplit = () => {
+    rows.forEach(r => {
+      if (r.pages.length) return;
+      const iv = normInv(r.inv);
+      if (iv && byInv.has(iv)){ r.pages = byInv.get(iv).slice(); r.page = r.pages[0]; n++; }
+    });
+  };
+  shareSplit();
+
+  const open = [];
+  rows.forEach((r, i) => { if (!r.pages.length) open.push(i); });
+  const need = new Map();
+  open.forEach(i => need.set(i, rowNeedles(rows[i])));
+
+  const invHit = (nd, q) => nd.inv.some(x => sp[q].indexOf(" " + x + " ") >= 0);
+  const scoreAt = (nd, q) => {
+    if (q === skip || claimed.has(q)) return 0;
+    let s = 0;
     /* Match the invoice number as a whole word. The old code looked for it as
        a bare substring of the page with every separator stripped, so a short
        number turned up inside an account number or a total on an unrelated
        page and the line was linked to somebody else's invoice. */
-    const needles = [];
-    if (iv.length >= 4) needles.push(iv);
-    if (digits.length >= 4 && digits !== iv) needles.push(digits);
-    let hits = [];
-    if (needles.length){
-      for (let q = 0; q < sp.length; q++){
-        if (q === skip) continue;
-        if (needles.some(nd => sp[q].indexOf(" " + nd + " ") >= 0)) hits.push(q);
-      }
-      if (!hits.length && iv.length >= 6){           // long numbers only, as a fallback
-        for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(iv)) hits.push(q); }
-      }
+    if (invHit(nd, q)) s += 6;
+    else if (nd.iv.length >= 6 && sq[q].includes(nd.iv)) s += 5;   // long numbers only
+    if (nm[q].indexOf(" " + nd.amt + " ") >= 0) s += 4;
+    else if (sq[q].includes(nd.amt)) s += 2;                       // looser, as a nudge
+    return s + vendorHit(nd.vt, pw[q]) * 5;
+  };
+
+  /* Which line each page looks most like, so no line walks off with a page
+     another line matches better. */
+  const cand = new Map();
+  const top = new Array(N).fill(0), topRow = new Array(N).fill(-1), tied = new Array(N).fill(false);
+  open.forEach(i => {
+    const nd = need.get(i), list = [];
+    for (let q = 0; q < N; q++){
+      const s = scoreAt(nd, q);
+      if (s < MATCH_MIN) continue;
+      list.push({ p: q, s });
+      if (s > top[q]){ top[q] = s; topRow[q] = i; tied[q] = false; }
+      else if (s === top[q]) tied[q] = true;
     }
-    let chosen = pickPage(hits, claimed, last);
-    if (chosen == null){
-      const k = Math.abs(r.amount).toFixed(2);
-      hits = [];
-      for (let q = 0; q < nm.length; q++){ if (q !== skip && nm[q].indexOf(" " + k + " ") >= 0) hits.push(q); }
-      chosen = pickPage(hits, claimed, last);
-      if (chosen == null){                           // looser, as a last resort
-        hits = [];
-        for (let q = 0; q < sq.length; q++){ if (q !== skip && sq[q].includes(k)) hits.push(q); }
-        chosen = pickPage(hits, claimed, last);
-      }
-    }
-    if (chosen != null){
-      const pages = [chosen];                        // carry on over a multi-page invoice
-      for (let q = chosen + 1; hits.indexOf(q) >= 0 && !claimed.has(q); q++) pages.push(q);
-      r.pages = pages; r.page = pages[0];
-      pages.forEach(q => claimed.add(q));
-      if (iv) byInv.set(iv, pages.slice());
-      last = pages[pages.length - 1]; n++;
-    }
+    list.sort((a, b) => b.s - a.s || a.p - b.p);
+    cand.set(i, list);
   });
+  /* Pages carrying some line's invoice number: where one invoice ends and the
+     next begins, so a multi-page invoice does not swallow the one after it. */
+  const invOwner = new Array(N).fill(-1);
+  open.forEach(i => {
+    const nd = need.get(i);
+    if (!nd.inv.length) return;
+    for (let q = 0; q < N; q++){ if (q !== skip && invHit(nd, q)) invOwner[q] = invOwner[q] === -1 ? i : -2; }
+  });
+
+  const take = (i, p, list) => {
+    const r = rows[i];
+    const scored = new Set(list.map(c => c.p));
+    const pages = [p];
+    /* carry on over a multi-page invoice, but stop at the next one */
+    for (let q = p + 1; q < N && pages.length < 12; q++){
+      if (claimed.has(q) || q === skip || !scored.has(q)) break;
+      if (invOwner[q] !== -1 && invOwner[q] !== i) break;
+      if (topRow[q] !== i || tied[q]) break;
+      pages.push(q);
+    }
+    r.pages = pages; r.page = pages[0];
+    pages.forEach(q => claimed.add(q));
+    const iv = normInv(r.inv);
+    if (iv) byInv.set(iv, pages.slice());
+    n++;
+  };
+
+  /* First the lines that own a page outright — nothing else comes close — so
+     a weak amount match earlier in the aging cannot take a page that a later
+     line matches by its invoice number. */
+  open.forEach(i => {
+    if (rows[i].pages.length) return;
+    const win = cand.get(i).find(c => topRow[c.p] === i && !tied[c.p] && !claimed.has(c.p));
+    if (win) take(i, win.p, cand.get(i));
+  });
+  /* Then the rest in aging order, each taking its best page still free,
+     preferring one at or after where the last line landed since backup PDFs
+     run in the same order as the aging. */
+  let last = 0;
+  rows.forEach((r, i) => {
+    if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
+    const list = cand.get(i);
+    if (!list) return;
+    const free = list.filter(c => !claimed.has(c.p));
+    if (!free.length) return;
+    const best = free.filter(c => c.s === free[0].s);
+    const fwd = best.filter(c => c.p >= last);
+    take(i, (fwd.length ? fwd[0] : best[0]).p, list);
+    last = r.pages[r.pages.length - 1];
+  });
+  shareSplit();
   return n;
 }
 
