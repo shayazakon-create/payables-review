@@ -1125,6 +1125,24 @@ function gridTotal(){
 async function openMonth(id){
   const M = await dbGet("months", id);
   if (!M) return toast("Month not found");
+  /* A change the server never received — the tab was closed, or the
+     connection dropped. Whichever copy is newer wins. */
+  try{
+    const raw = localStorage.getItem(journalKey(id));
+    const d = raw && JSON.parse(raw);
+    /* Not a strict ">": the local copy is written first and the server copy
+       is made from it, so an equal stamp means the same change — and two
+       saves inside one millisecond are ordinary. A tie used to throw the
+       local copy away, taking any unsaved edit with it. A copy is only left
+       behind at all when a save did not get through, so it is discarded only
+       when the server plainly has something newer. */
+    if (d && d.rows && (d.savedAt || 0) >= (M.savedAt || 0)){
+      M.rows = d.rows; M.matchVer = d.matchVer; M.savedAt = d.savedAt;
+      if (d.summaryPage != null) M.summaryPage = d.summaryPage;
+      toast("Restored the changes this computer had not managed to save yet.");
+      dbPut("months", M).then(() => { try{ localStorage.removeItem(journalKey(id)); }catch(e){} }).catch(() => {});
+    } else if (d){ localStorage.removeItem(journalKey(id)); }
+  } catch(e){ /* nothing usable stored */ }
   S.M = M; S.sel = 0; S.filter = "all";
   M.rows.forEach(r => { if (!r.pages) r.pages = (r.page != null ? [r.page] : []); });
   document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.f === "all"));
@@ -1519,19 +1537,42 @@ function applyPrevDecisions(){
   renderTable(); renderRight(); saveSoon();
   toast(n ? "Copied your earlier decisions onto " + n + " carried-over invoice" + (n > 1 ? "s" : "") : "No carried-over invoices with earlier decisions found.");
 }
+/* A change is written to this browser the instant it is made, and to the
+   server a moment later. The local copy is what makes a change survive:
+   saving to the server is a network round trip, and a browser does not wait
+   for one when a tab is closed — so a page you linked and then closed the
+   tab on was simply gone. localStorage.setItem finishes before the tab dies.
+   The copy is cleared as soon as the server has the change, so one is only
+   ever left behind when a save did not get through. */
+function journalKey(id){ return "draft|" + id; }
+function journal(){
+  if (!S.M) return;
+  try{ localStorage.setItem(journalKey(S.M.id), JSON.stringify(S.M)); }
+  catch(e){ /* private mode, or out of room — the server save still runs */ }
+}
 function saveSoon(){
-  if (S.readonly) return;
+  if (S.readonly || !S.M) return;
+  S.M.savedAt = Date.now();
+  journal();
   clearTimeout(S.saveTimer);
   S.saveTimer = setTimeout(saveNow, 400);
 }
 async function saveNow(){
   if (S.readonly) return;
   clearTimeout(S.saveTimer);
-  if (S.M && S.screen === "review"){
-    S.M.savedAt = Date.now();
-    try{ await dbPut("months", S.M); }
-    catch(e){ toast("Couldn't save — check your internet connection. Your last change may not be stored."); }
+  /* Deliberately not conditioned on still being on the review screen. It
+     used to be, so a change made in the last fraction of a second before
+     leaving that screen fired its timer, found the screen had moved on, and
+     dropped the save without a word. */
+  const M = S.M;
+  if (!M) return;
+  M.savedAt = Date.now();
+  journal();
+  try{
+    await dbPut("months", M);
+    try{ localStorage.removeItem(journalKey(M.id)); }catch(e){}
   }
+  catch(e){ toast("Couldn't save to the server — your change is held on this computer and will go up next time you open this month."); }
 }
 
 /* ---------- jobs / projects (contract tracking for contractors) ---------- */
@@ -2288,7 +2329,10 @@ function reviewKeydown(e){
 }
 document.addEventListener("keydown", reviewKeydown);
 window.addEventListener("resize", () => { if (S.screen === "review" && S.pdf) renderPdf(); });
-window.addEventListener("beforeunload", () => { if (S.M) saveNow(); if (S.pop && !S.pop.closed) S.pop.close(); });
+window.addEventListener("beforeunload", () => { if (S.M){ journal(); saveNow(); } if (S.pop && !S.pop.closed) S.pop.close(); });
+/* Closing a laptop or switching apps on a phone often never fires
+   beforeunload at all; this one does. */
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && S.M && !S.readonly){ journal(); saveNow(); } });
 
 boot();
 </script>
