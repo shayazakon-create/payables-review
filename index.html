@@ -647,7 +647,7 @@ function show(scr){
 /* Shown in the header. Bumped with any change worth being able to confirm
    from the page itself, because "am I even running the new version?" cost a
    round of this otherwise. */
-const BUILD = "v7 · 22 Sep";
+const BUILD = "v8 · 22 Sep";
 async function boot(){
   const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
@@ -1486,8 +1486,17 @@ function whyNoPage(){
   const pgs = n => n.length ? n.map(q => '<button style="padding:0 7px;font-size:12px;margin-right:3px" onclick="gotoPage(' + q + ')">' + (q + 1) + '</button>').join("") : '<span style="color:var(--red)">not on any page</span>';
   const find = list => { const o = []; for (let q = 0; q < sp.length; q++) if (q !== S.M.summaryPage && list.some(x => sp[q].indexOf(" " + x + " ") >= 0 || st[q].indexOf(" " + x + " ") >= 0)) o.push(q); return o; };
   const invAll = nd.inv.concat(nd.invAlt);
-  const vHits = [];
-  for (let q = 0; q < t.length; q++) if (q !== S.M.summaryPage && vendorHit(nd.vt, pageWords(t[q])) >= 0.8) vHits.push(q);
+  const pwAll = t.map(pageWords);
+  const dfm = new Map();
+  pwAll.forEach(w => w.forEach(x => dfm.set(x, (dfm.get(x) || 0) + 1)));
+  const wg = w => (t.length >= 5 && (dfm.get(w) || 0) / t.length > 0.6) ? 0.15 : 1;
+  const vHits = [], dHits = [];
+  for (let q = 0; q < t.length; q++){
+    if (q === S.M.summaryPage) continue;
+    if (vendorHit(nd.vt, pwAll[q]) >= 0.8) vHits.push(q);
+    let m = 0; nd.dt.forEach(w => { if (pwAll[q].has(w)) m += wg(w); });
+    if (m >= 0.9) dHits.push(q);
+  }
   const aHits = [];
   for (let q = 0; q < nm.length; q++) if (q !== S.M.summaryPage && nm[q].indexOf(" " + nd.amt + " ") >= 0) aHits.push(q);
   const blank = t.filter(x => !x || x.replace(/[^a-z0-9]/gi, "").length < 24).length;
@@ -1500,6 +1509,7 @@ function whyNoPage(){
     + '<table style="margin-top:4px;border-collapse:collapse">'
     + row("Invoice no.", invAll.length ? invAll.join("  ") : "(none on the aging)", find(invAll))
     + row("Vendor", nd.vt.join(" ") || "(none)", vHits)
+    + row("What it is for", nd.dt.join(" ") || "(nothing distinctive)", dHits)
     + row("Amount", nd.amt, aHits)
     + '</table>'
     + (blank ? '<div style="margin-top:5px;color:var(--red)">' + blank + ' of ' + t.length + ' pages came back with no readable text — those pages cannot be matched on anything.</div>' : '')
@@ -2030,7 +2040,7 @@ async function runOcr(rebuild){
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 7;
+const MATCH_VER = 8;
 /* The page's words, squashed the same way vendor names are (legal suffixes
    dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
    on the aging and on its invoice. */
@@ -2055,6 +2065,20 @@ function vendorHit(vt, words){
   /* a one- or two-letter name with nothing after it is too thin to link on */
   if (sig.length === 1 && vt[0].length < 3) return 0.5;
   return hit / sig.length;
+}
+/* Words from the aging's description that are worth looking for on a page.
+   Dates and the boilerplate every line carries are dropped; what is left is
+   things like "porter", "landscaping", "pest". */
+const _DSTOP = { monthly:1, invoice:1, invoices:1, service:1, services:1, charge:1, charges:1,
+  billing:1, billed:1, period:1, total:1, amount:1, account:1, from:1, this:1, that:1, with:1,
+  per:1, and:1, the:1, for:1, inc:1, llc:1, ltd:1 };
+function descTokens(d){
+  const out = [];
+  String(d == null ? "" : d).toLowerCase()
+    .replace(/\b\d+\s*[\/-]\s*\d+\b/g, " ")
+    .split(/[^a-z0-9]+/)
+    .forEach(w => { if (w.length >= 4 && !_DSTOP[w] && !/^\d+$/.test(w) && out.indexOf(w) < 0) out.push(w); });
+  return out;
 }
 /* Everything about one aging line that might be printed on its invoice.
    `inv` holds forms of the complete number, `invAlt` the leading piece of a
@@ -2087,7 +2111,7 @@ function rowNeedles(r){
      never a bare year, which would match every page in the package. */
   const parts = raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
   if (parts.length > 1 && !/^(19|20)\d\d$/.test(parts[0])) add(invAlt, parts[0]);
-  return { iv, inv, invAlt, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor) };
+  return { iv, inv, invAlt, amt: Math.abs(r.amount).toFixed(2), vt: vtokens(r.vendor), dt: descTokens(r.desc) };
 }
 /* A line and a page are scored on the three things an invoice shows: its
    number, its total, and whose invoice it is. Matching on the number or the
@@ -2163,9 +2187,39 @@ function autoMatch(rows, texts, skip){
   });
   /* How much of each line's vendor is on each page, worked out up front so a
      page can also be asked whether it announces somebody else. */
+  /* A word on nearly every page tells the pages apart not at all. Every
+     invoice in this package is addressed to the same building, so "crescent",
+     "centre", "atlanta", "peachtree" are on all of them and are worth
+     nothing; "porter", "pest", "landscaping" appear once and are worth a
+     great deal. Worked out from the package itself rather than a word list,
+     and only where there are enough pages for the count to mean anything. */
+  const df = new Map();
+  pw.forEach(w => w.forEach(x => df.set(x, (df.get(x) || 0) + 1)));
+  const wgt = w => (N >= 5 && (df.get(w) || 0) / N > 0.6) ? 0.15 : 1;
+  /* How much of the line's description is on the page, by weight. The vendor
+     name is often not on its own invoice at all — the name printed largest is
+     usually the building being billed — while the description says what the
+     bill is for, and that is on it. */
+  const descHit = (dt, words) => {
+    if (!dt.length) return 0;
+    let m = 0;
+    dt.forEach(w => { if (words.has(w)) m += wgt(w); });
+    /* Scored on how distinctive what matched is, not on what fraction of the
+       description matched: an aging says "Monthly day porter services. Five-
+       5 days" where the invoice says only DAY PORTER, so asking for half the
+       words back would find nothing. One telling word counts for something,
+       two for as much as this signal is ever worth. */
+    if (m < 0.9) return 0;
+    return Math.min(1, m / 2);
+  };
   const vhm = open.map(i => {
     const vt = need.get(i).vt, row = new Float64Array(N);
     for (let q = 0; q < N; q++) row[q] = vendorHit(vt, pw[q]);
+    return row;
+  });
+  const dhm = open.map(i => {
+    const dt = need.get(i).dt, row = new Float64Array(N);
+    for (let q = 0; q < N; q++) row[q] = descHit(dt, pw[q]);
     return row;
   });
   const named = new Uint8Array(N);
@@ -2174,7 +2228,7 @@ function autoMatch(rows, texts, skip){
   const scoreAt = (k, i, q) => {
     if (q === skip || claimed.has(q)) return 0;
     const nd = need.get(i);
-    const vh = vhm[k][q];
+    const vh = vhm[k][q], dh = dhm[k][q];
     let s = 0;
     if (invHit(nd, q)) s += 6;
     else if (onPage(nd.invAlt, q)) s += 5;                         // a stapled-on number
@@ -2189,11 +2243,11 @@ function autoMatch(rows, texts, skip){
        or carries another line's invoice number. Those lines stay unlinked and
        fall to the "guessing page N" prompt, which is honest, rather than
        opening the wrong vendor's bill. */
-    if (!s || (!vh && s <= 4)){
-      if (named[q] && !vh) return 0;
+    if (!s || (!vh && !dh && s <= 4)){
+      if (named[q] && !vh && !dh) return 0;
       if (invOwner[q] !== -1 && invOwner[q] !== i) return 0;
     }
-    return s + vh * 5;
+    return s + vh * 5 + dh * 4;
   };
 
   /* Which line each page looks most like, so no line walks off with a page
