@@ -647,7 +647,7 @@ function show(scr){
 /* Shown in the header. Bumped with any change worth being able to confirm
    from the page itself, because "am I even running the new version?" cost a
    round of this otherwise. */
-const BUILD = "v6 · 22 Sep";
+const BUILD = "v7 · 22 Sep";
 async function boot(){
   const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
@@ -2030,7 +2030,7 @@ async function runOcr(rebuild){
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 6;
+const MATCH_VER = 7;
 /* The page's words, squashed the same way vendor names are (legal suffixes
    dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
    on the aging and on its invoice. */
@@ -2069,10 +2069,15 @@ function rowNeedles(r){
     if (t.length >= 4 && inv.indexOf(t) < 0 && invAlt.indexOf(t) < 0) arr.push(t);
   };
   add(inv, iv);
-  /* Accounting systems pad: "INV-0004821" on the aging prints as "4821". */
+  /* Accounting systems pad: "INV-0004821" on the aging prints as "4821".
+     Only where the digits form a single run, though: scraped out of
+     "1JHH-YHW7-1C7G" they give "1717", which nobody printed anywhere and
+     which matches whatever page happens to carry those four digits. */
   const digits = raw.replace(/\D/g, "");
-  add(inv, digits);
-  add(inv, digits.replace(/^0+/, ""));
+  if ((raw.match(/\d+/g) || []).length === 1){
+    add(inv, digits);
+    add(inv, digits.replace(/^0+/, ""));
+  }
   /* And they staple things on: "148252-09/09/2026" is invoice 148252, billed
      on the 9th. Squashed whole it is a 14-digit number that appears on no
      page at all, so without the leading piece the strongest signal a line has
@@ -2126,6 +2131,7 @@ function autoMatch(rows, texts, skip){
      on somebody else's invoice. Run before scoring so those lines do not take
      a page of their own, and again at the end to catch the pairs whose first
      line was the one matched. */
+  const sameAsPrev = (idx, m) => m > 0 && normInv(rows[idx[m]].inv) && normInv(rows[idx[m]].inv) === normInv(rows[idx[m-1]].inv);
   const shareSplit = () => {
     rows.forEach(r => {
       if (r.pages.length) return;
@@ -2207,6 +2213,17 @@ function autoMatch(rows, texts, skip){
     cand.set(i, list);
   });
 
+  /* The alignment has already weighed this line against every other; assign
+     what it decided rather than putting the run back through take()'s
+     tie-breaking, which is there for the unordered fallback below. */
+  const assign = (i, pages) => {
+    const r = rows[i];
+    r.pages = pages.slice(); r.page = pages[0];
+    pages.forEach(q => claimed.add(q));
+    const iv = normInv(r.inv);
+    if (iv) byInv.set(iv, pages.slice());
+    n++;
+  };
   const take = (i, p, list) => {
     const r = rows[i];
     const scored = new Set(list.map(c => c.p));
@@ -2225,28 +2242,130 @@ function autoMatch(rows, texts, skip){
     n++;
   };
 
-  /* First the lines that own a page outright — nothing else comes close — so
-     a weak amount match earlier in the aging cannot take a page that a later
-     line matches by its invoice number. */
+  /* The backup is filed in the same order as the aging — that is how the
+     manager assembles it — and that ordering is worth more than any single
+     piece of text on a page. It says line 3's invoice comes after line 2's
+     and before line 4's, which is a fact about every line at once, including
+     the ones whose own page reads badly. Matching each line independently
+     threw all of it away, so a line could land forty pages from where its
+     neighbours sat. Lines are now aligned to pages in order: the run of
+     pages each line takes must start after the previous line's, and a line
+     may take none (payroll and management recoveries have no invoice) while
+     a page may belong to none (dividers, statements, continuation sheets). */
+  const kOf = new Map(); open.forEach((i, k) => kOf.set(i, k));
+  const SIG = open.map((i, k) => { const v = new Float64Array(N); for (let q = 0; q < N; q++) v[q] = scoreAt(k, i, q); return v; });
+  const sigAt = (i, q) => { const k = kOf.get(i); return k == null ? 0 : SIG[k][q]; };
+
+  /* Costs are set so a page with real evidence is always worth taking, and a
+     page with none is not: skipping a line costs less than claiming a page
+     that says nothing about it. */
+  const TAKE_COST = 0.8, LINE_SKIP = 0.4, PAGE_SKIP = 0.3, MAXK = 6;
+  function alignSeg(idx, lo, hi){
+    const R = idx.length, P = hi - lo + 1;
+    if (R <= 0 || P <= 0) return new Array(Math.max(R, 0)).fill(null);
+    const NEG = -1e9;
+    const best = [], back = [];
+    for (let i = 0; i <= R; i++){ best.push(new Float64Array(P + 1).fill(NEG)); back.push(new Array(P + 1).fill(null)); }
+    for (let p = 0; p <= P; p++) best[R][p] = -PAGE_SKIP * (P - p);
+    for (let i = R - 1; i >= 0; i--){
+      for (let p = P; p >= 0; p--){
+        let bs = best[i + 1][p] - LINE_SKIP, bk = { k: 0, np: p };   // this line has no backup
+        if (p < P){
+          const alt = best[i][p + 1] - PAGE_SKIP;                    // this page belongs to no line
+          if (alt > bs){ bs = alt; bk = { k: -1, np: p + 1 }; }
+          let run = 0;
+          const lead = sigAt(idx[i], lo + p);
+          for (let k = 1; k <= MAXK && p + k <= P; k++){
+            const sv = sigAt(idx[i], lo + p + k - 1);
+            /* An invoice opens with its invoice page; the sheets behind it
+               say less, not more. A page carrying more evidence than the one
+               the run started on is the next invoice, not a continuation of
+               this one — without this the arithmetic ties and a line can be
+               given a run that starts on somebody's terms-and-conditions
+               sheet and swallows the invoice after it. */
+            if (k > 1 && sv > lead) break;
+            run += sv - TAKE_COST;
+            const v = run + best[i + 1][p + k];
+            if (v > bs){ bs = v; bk = { k, np: p + k }; }
+          }
+        }
+        best[i][p] = bs; back[i][p] = bk;
+      }
+    }
+    const out = new Array(R).fill(null);
+    let i = 0, p = 0;
+    while (i < R && p <= P){
+      const b = back[i][p];
+      if (!b) break;
+      if (b.k === -1){ p = b.np; continue; }
+      if (b.k > 0){ const pg = []; for (let j = 0; j < b.k; j++) pg.push(lo + p + j); out[i] = pg; }
+      p = b.np; i++;
+    }
+    return out;
+  }
+
+  /* Lines already linked — by hand, or on an earlier run — are fixed points
+     the alignment works between, so a correction made by hand pins every
+     line after it as well. */
+  const segs = [];
+  let run = null;
+  rows.forEach((r, i) => {
+    if (r.pages.length){ if (run){ segs.push(run); run = null; } }
+    else { if (!run) run = []; run.push(i); }
+  });
+  if (run) segs.push(run);
+  const pageBefore = i => { for (let j = i - 1; j >= 0; j--) if (rows[j].pages.length) return rows[j].pages[rows[j].pages.length - 1]; return -1; };
+  const pageAfter  = i => { for (let j = i + 1; j < rows.length; j++) if (rows[j].pages.length) return rows[j].pages[0]; return N; };
+
+  segs.forEach(idx => {
+    const lo = pageBefore(idx[0]) + 1, hi = pageAfter(idx[idx.length - 1]) - 1;
+    const got = alignSeg(idx, lo, hi);
+    /* Keep what the page itself vouches for. */
+    const kept = new Array(idx.length).fill(false);
+    got.forEach((pg, n) => {
+      if (pg && sigAt(idx[n], pg[0]) >= MATCH_MIN){ kept[n] = true; }
+    });
+    /* Then fill the gaps between two of those, but only where the count
+       works out exactly — as many unplaced lines as unclaimed pages between
+       them. That is the manager's ordering doing the work: a line whose own
+       invoice reads badly is still pinned by the ones either side of it.
+       Where the count does not fit, something is missing or doubled and
+       guessing which would be worse than leaving it to be linked by hand. */
+    /* The edges only count as anchors when a real linked line sits beyond
+       them. Otherwise a stretch of aging with no evidence anywhere would be
+       dealt out one line per page just because the counts happened to tie —
+       which is guessing, and guessing is what put a line on the wrong bill
+       in the first place. */
+    const anchors = [{ n: -1, endPage: lo - 1, real: pageBefore(idx[0]) >= 0 }];
+    got.forEach((pg, m) => { if (kept[m]) anchors.push({ n: m, startPage: pg[0], endPage: pg[pg.length - 1], real: true }); });
+    anchors.push({ n: idx.length, startPage: hi + 1, real: pageAfter(idx[idx.length - 1]) < N });
+    for (let a = 0; a + 1 < anchors.length; a++){
+      const A = anchors[a], B = anchors[a + 1];
+      if (!A.real || !B.real) continue;
+      const holes = [];
+      for (let q = A.endPage + 1; q <= B.startPage - 1; q++) if (q !== skip && !claimed.has(q)) holes.push(q);
+      const want = [];
+      for (let m = A.n + 1; m < B.n; m++) if (!kept[m] && !sameAsPrev(idx, m)) want.push(m);
+      if (holes.length > 0 && holes.length === want.length){
+        want.forEach((m, j) => { got[m] = [holes[j]]; kept[m] = true; });
+      }
+    }
+    got.forEach((pg, m) => { if (kept[m] && pg) assign(idx[m], pg); });
+  });
+  /* A package that is NOT filed in aging order still gets matched: anything
+     the alignment left behind may take a page it plainly owns — strong
+     evidence, still free, and no other line matching it as well. Order is
+     the better signal wherever it holds, and this costs nothing where it
+     does not. */
   open.forEach(i => {
     if (rows[i].pages.length) return;
-    const win = cand.get(i).find(c => topRow[c.p] === i && !tied[c.p] && !claimed.has(c.p));
-    if (win) take(i, win.p, cand.get(i));
-  });
-  /* Then the rest in aging order, each taking its best page still free,
-     preferring one at or after where the last line landed since backup PDFs
-     run in the same order as the aging. */
-  let last = 0;
-  rows.forEach((r, i) => {
-    if (r.pages.length){ last = r.pages[r.pages.length - 1]; return; }
-    const list = cand.get(i);
-    if (!list) return;
-    const free = list.filter(c => !claimed.has(c.p));
-    if (!free.length) return;
-    const best = free.filter(c => c.s === free[0].s);
-    const fwd = best.filter(c => c.p >= last);
-    take(i, (fwd.length ? fwd[0] : best[0]).p, list);
-    last = r.pages[r.pages.length - 1];
+    const k = kOf.get(i);
+    let bp = -1, bs = MATCH_MIN - 0.001;
+    for (let q = 0; q < N; q++){
+      if (claimed.has(q) || q === skip) continue;
+      if (SIG[k][q] > bs && topRow[q] === i && !tied[q]){ bs = SIG[k][q]; bp = q; }
+    }
+    if (bp >= 0) take(i, bp, [{ p: bp, s: bs }]);
   });
   shareSplit();
   return n;
