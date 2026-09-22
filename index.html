@@ -647,7 +647,7 @@ function show(scr){
 /* Shown in the header. Bumped with any change worth being able to confirm
    from the page itself, because "am I even running the new version?" cost a
    round of this otherwise. */
-const BUILD = "v8 · 22 Sep";
+const BUILD = "v9 · 22 Sep";
 async function boot(){
   const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
@@ -2040,7 +2040,7 @@ async function runOcr(rebuild){
 /* Bumped whenever autoMatch changes. Links carry the version that made them,
    so a package linked by an older, buggier matcher is rebuilt on open instead
    of keeping wrong pages until someone thinks to press Auto-match. */
-const MATCH_VER = 8;
+const MATCH_VER = 9;
 /* The page's words, squashed the same way vendor names are (legal suffixes
    dropped, "ctr"/"center" both becoming "centre"), so a vendor reads the same
    on the aging and on its invoice. */
@@ -2168,7 +2168,7 @@ function autoMatch(rows, texts, skip){
   const open = [];
   rows.forEach((r, i) => { if (!r.pages.length) open.push(i); });
   const need = new Map();
-  open.forEach(i => need.set(i, rowNeedles(rows[i])));
+  rows.forEach((r, i) => need.set(i, rowNeedles(r)));
 
   /* Match the invoice number as a whole word. The old code looked for it as
      a bare substring of the page with every separator stripped, so a short
@@ -2179,11 +2179,19 @@ function autoMatch(rows, texts, skip){
 
   /* Pages carrying some line's invoice number: where one invoice ends and the
      next begins, so a multi-page invoice does not swallow the one after it. */
+  /* Over every line, not just the unlinked ones: a page printing "INVOICE#
+     10000838440" belongs to the line carrying that number whether or not it
+     already has its page, and nothing else may be put there. */
   const invOwner = new Array(N).fill(-1);
-  open.forEach(i => {
+  rows.forEach((r, i) => {
     const nd = need.get(i);
     if (!nd.inv.length) return;
     for (let q = 0; q < N; q++){ if (q !== skip && invHit(nd, q)) invOwner[q] = invOwner[q] === -1 ? i : -2; }
+  });
+  const vendorOwner = new Array(N).fill(-1);
+  rows.forEach((r, i) => {
+    const vt = need.get(i).vt;
+    for (let q = 0; q < N; q++){ if (q !== skip && vendorHit(vt, pw[q]) >= 0.8) vendorOwner[q] = vendorOwner[q] === -1 ? i : -2; }
   });
   /* How much of each line's vendor is on each page, worked out up front so a
      page can also be asked whether it announces somebody else. */
@@ -2400,8 +2408,20 @@ function autoMatch(rows, texts, skip){
       for (let q = A.endPage + 1; q <= B.startPage - 1; q++) if (q !== skip && !claimed.has(q)) holes.push(q);
       const want = [];
       for (let m = A.n + 1; m < B.n; m++) if (!kept[m] && !sameAsPrev(idx, m)) want.push(m);
-      if (holes.length > 0 && holes.length === want.length){
-        want.forEach((m, j) => { got[m] = [holes[j]]; kept[m] = true; });
+      /* Filling a gap is the one place a line is given a page the page
+         itself did not vouch for, so it may only be given one that belongs
+         to nobody else: not printing another line's invoice number, not
+         headed with another vendor's name. Without this a line was handed a
+         page merely because the count tied — which put a $29.04 pest-control
+         line on somebody's $1,263.35 invoice, the exact thing this is all
+         supposed to stop. */
+      const free = holes.filter(q => (invOwner[q] === -1 || invOwner[q] === idx[0]) &&
+                                     (vendorOwner[q] === -1));
+      if (holes.length > 0 && holes.length === want.length && free.length === holes.length){
+        want.forEach((m, j) => {
+          if (invOwner[holes[j]] !== -1 && invOwner[holes[j]] !== idx[m]) return;
+          got[m] = [holes[j]]; kept[m] = true;
+        });
       }
     }
     got.forEach((pg, m) => { if (kept[m] && pg) assign(idx[m], pg); });
