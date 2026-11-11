@@ -647,7 +647,7 @@ function show(scr){
 /* Shown in the header. Bumped with any change worth being able to confirm
    from the page itself, because "am I even running the new version?" cost a
    round of this otherwise. */
-const BUILD = "v9 · 22 Sep · app.html";
+const BUILD = "v10 · 11 Nov · app.html";
 async function boot(){
   const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
@@ -872,12 +872,24 @@ async function handleXlsx(file){
   try{
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { cellDates: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
-    const hdr = detectHeader(grid);
-    if (hdr < 0){ toast("Couldn't find a header row in that spreadsheet."); return; }
+    /* A cash-availability workbook opens on a funding-request memo — To,
+       From, Date, Re — with the payables on a later tab. Reading sheet one
+       and only sheet one found no header there and refused the whole file,
+       which looks like the file itself not being accepted. */
+    let grid = null, hdr = -1, sheet = "";
+    const rank = n => /payable|invoice|ap\b/i.test(n) ? 0 : /aging/i.test(n) ? 1 : /budget|cashform|summary/i.test(n) ? 3 : 2;
+    [...wb.SheetNames].sort((a, b) => rank(a) - rank(b)).some(n => {
+      const g = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null });
+      const h = detectHeader(g);
+      if (h < 0) return false;
+      const m = autoMap(colLabels(g, h).labels);
+      if (m.vendor < 0 || m.amount < 0) return false;    // a table, but not payables
+      grid = g; hdr = h; sheet = n; return true;
+    });
+    if (hdr < 0){ toast("Couldn't find a payables table in that spreadsheet — no sheet has both a vendor and an amount column."); return; }
+    if (wb.SheetNames.length > 1 && sheet !== wb.SheetNames[0]) toast('Using the "' + sheet + '" sheet of ' + wb.SheetNames.length + ".");
     const { labels, skip } = colLabels(grid, hdr);
-    S.imp.grid = grid; S.imp.hdr = hdr; S.imp.skip = skip; S.imp.labels = labels; S.imp.xlsxName = file.name;
+    S.imp.grid = grid; S.imp.hdr = hdr; S.imp.skip = skip; S.imp.labels = labels; S.imp.xlsxName = file.name + (sheet && sheet !== wb.SheetNames[0] ? " · " + sheet : "");
     const per = detectPeriod(grid, file.name);
     if (per){ $("inPeriod").value = per.length === 7 ? per + "-01" : per; toast("Date detected from the report: " + moLabel(per)); }
     const auto = fixGrossAmount(grid, hdr, skip, autoMap(labels), labels);
