@@ -175,6 +175,7 @@ body.readonly .actions,body.readonly #noteinp,body.readonly #btnOcr,body.readonl
       <h3 style="font-size:14px;margin:14px 0 8px">Check the columns</h3>
       <p class="small muted" style="margin-top:0">I guessed which column is which. Fix any that are wrong — the choice is remembered for this building.</p>
       <div id="maprows"></div>
+      <div id="markbox" class="hidden"></div>
       <h3 style="font-size:14px;margin:14px 0 6px">Preview — <span id="pvcount"></span></h3>
       <div class="preview" id="pvtable"></div>
     </div>
@@ -606,7 +607,8 @@ function parseRows(rows, h, skip, m){
       hst: splitOut ? taxV : null,
       desc: descS,
       gl: glS,
-      status: null, note: "", page: null
+      status: null, note: "", page: null,
+      _row: i                                   // which spreadsheet row this came from
     });
   }
   return out.filter(x => x.vendor);
@@ -647,7 +649,7 @@ function show(scr){
 /* Shown in the header. Bumped with any change worth being able to confirm
    from the page itself, because "am I even running the new version?" cost a
    round of this otherwise. */
-const BUILD = "v10 · 11 Nov";
+const BUILD = "v11 · 16 Nov";
 async function boot(){
   const hb = $("hdrbuild"); if (hb) hb.textContent = BUILD;
   if (location.hash.indexOf("#share=") === 0){ return viewerBoot(location.hash.slice(7)); }
@@ -871,7 +873,7 @@ $("fLatePdf").addEventListener("change", async e => {
 async function handleXlsx(file){
   try{
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { cellDates: true });
+    const wb = XLSX.read(buf, { cellDates: true, cellStyles: true });
     /* A cash-availability workbook opens on a funding-request memo — To,
        From, Date, Re — with the payables on a later tab. Reading sheet one
        and only sheet one found no header there and refused the whole file,
@@ -884,7 +886,7 @@ async function handleXlsx(file){
       if (h < 0) return false;
       const m = autoMap(colLabels(g, h).labels);
       if (m.vendor < 0 || m.amount < 0) return false;    // a table, but not payables
-      grid = g; hdr = h; sheet = n; return true;
+      grid = g; hdr = h; sheet = n; S.imp.ws = wb.Sheets[n]; return true;
     });
     if (hdr < 0){ toast("Couldn't find a payables table in that spreadsheet — no sheet has both a vendor and an amount column."); return; }
     if (wb.SheetNames.length > 1 && sheet !== wb.SheetNames[0]) toast('Using the "' + sheet + '" sheet of ' + wb.SheetNames.length + ".");
@@ -927,6 +929,90 @@ function handlePdf(file){
   $("dzP").querySelector("b").textContent = file.name;
 }
 const MAPFIELDS = [["vendor","Vendor name"],["inv","Invoice #"],["date","Invoice date"],["amount","Amount owed — the total WITH tax"],["base","Amount before tax (optional)"],["tax","HST / tax (optional)"],["desc","Description / notes"],["gl","Account / GL (optional)"]];
+/* Reading the highlighting out of the spreadsheet. A month is sometimes sent
+   with rows coloured in — "approved to pay", "on the last report but not
+   approved" — and that is worth knowing while reviewing, but it is a one-off:
+   most months arrive with no colour at all, so none of this shows up unless
+   the file actually has some. */
+const _NEUTRAL = { FFFFFF: 1, "000000": 1, C0C0C0: 1 };
+function cellFill(ws, R, C){
+  const c = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+  const f = c && c.s && (c.s.fgColor || (c.s.fill && c.s.fill.fgColor));
+  const rgb = f && f.rgb;
+  return (rgb && !_NEUTRAL[String(rgb).toUpperCase().slice(-6)]) ? String(rgb).toUpperCase().slice(-6) : "";
+}
+/* The colour a row is marked with: the one covering most of it, so a single
+   coloured cell in a column does not count as the row being flagged. */
+function rowFill(ws, R, nCols){
+  const n = {};
+  for (let C = 0; C < nCols; C++){ const f = cellFill(ws, R, C); if (f) n[f] = (n[f] || 0) + 1; }
+  let best = "", bn = 0;
+  for (const k in n) if (n[k] > bn){ bn = n[k]; best = k; }
+  return bn >= Math.max(3, nCols * 0.4) ? best : "";
+}
+/* Spreadsheets carry their own key above the table: a coloured square with
+   the wording beside it. The square is often a row off from its wording, and
+   which way is not knowable from one square alone — so every square is read
+   together and the alignment chosen that gives each colour its own distinct
+   wording. Guessing per-square gave two colours the same label. */
+function legendMap(ws, grid, hdr, colours){
+  const swatch = [];
+  for (let R = 0; R < Math.min(hdr, 12); R++)
+    for (let C = 0; C < 6; C++){
+      const f = cellFill(ws, R, C);
+      if (f && colours.indexOf(f) >= 0 && !swatch.some(x => x.f === f)) swatch.push({ R, f });
+    }
+  const textAt = R => {
+    const row = grid[R] || [];
+    for (let k = 0; k < 8; k++){ const v = row[k]; if (typeof v === "string" && v.trim().length > 3) return v.trim(); }
+    return "";
+  };
+  let best = {}, bestScore = -1;
+  [-1, 0, 1].forEach(off => {
+    const got = {}, seen = new Set();
+    let score = 0;
+    swatch.forEach(x => {
+      const t = textAt(x.R + off);
+      got[x.f] = t;
+      if (t && !seen.has(t)){ seen.add(t); score++; }
+    });
+    if (score > bestScore){ bestScore = score; best = got; }
+  });
+  return best;
+}
+function scanMarks(){
+  const { ws, grid, hdr, rows } = S.imp;
+  S.imp.marks = {};
+  if (!ws || !rows || !rows.length) return;
+  const nCols = Math.max(...grid.slice(hdr, hdr + 12).map(r => (r || []).length), 1);
+  const found = {};
+  rows.forEach(r => {
+    const f = rowFill(ws, r._row, nCols);
+    r._fill = f;
+    if (f) found[f] = (found[f] || 0) + 1;
+  });
+  const keys = Object.keys(found);
+  const legend = legendMap(ws, grid, hdr, keys);
+  keys.forEach(f => { S.imp.marks[f] = { n: found[f], label: legend[f] || "" }; });
+}
+function markLabelChanged(el){
+  const m = S.imp.marks[el.dataset.c];
+  if (m) m.label = el.value;
+}
+function renderMarks(){
+  const box = $("markbox");
+  if (!box) return;
+  const ks = Object.keys(S.imp.marks || {});
+  if (!ks.length){ box.innerHTML = ""; box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.innerHTML = '<h3 style="font-size:14px;margin:14px 0 6px">Highlighted rows</h3>'
+    + '<p class="small muted" style="margin-top:0">This file has colour on some rows. Name what each colour means and it is shown beside those lines while you review. Clear a name to ignore that colour.</p>'
+    + ks.map(c => '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+        + '<span style="display:inline-block;width:18px;height:18px;border:1px solid #999;border-radius:3px;background:#' + esc(c) + '"></span>'
+        + '<span class="small muted" style="white-space:nowrap">' + S.imp.marks[c].n + ' row' + (S.imp.marks[c].n > 1 ? 's' : '') + '</span>'
+        + '<input type="text" data-c="' + esc(c) + '" value="' + esc(S.imp.marks[c].label) + '" oninput="markLabelChanged(this)" placeholder="what this colour means" style="flex:1;max-width:380px;height:28px;font-size:13px">'
+        + '</div>').join("");
+}
 function renderMapping(){
   const { labels, map, grid, hdr, skip } = S.imp;
   const opts = i => '<option value="-1">— none —</option>' + labels.map((l, j) => {
@@ -954,6 +1040,8 @@ function refreshPreview(){
   $("pvtable").innerHTML = '<table><tr><th>Vendor</th><th>Inv #</th><th>Date</th><th style="text-align:right">Amount</th><th>Description</th></tr>'
     + rows.slice(0, 12).map(r => '<tr><td>'+esc(r.vendor)+'</td><td>'+esc(r.inv)+'</td><td>'+esc(r.date)+'</td><td style="text-align:right">$'+fmt(r.amount)+'</td><td class="desc-cell">'+esc(r.desc)+'</td></tr>').join("")
     + (rows.length > 12 ? '<tr><td colspan="5" class="muted">… and '+(rows.length-12)+' more</td></tr>' : '') + '</table>';
+  scanMarks();
+  renderMarks();
   $("mapbox").classList.remove("hidden");
   importValidate();
 }
@@ -966,6 +1054,11 @@ async function startReview(){
   const id = vkey(building) + "|" + period;
   const existing = await dbGet("months", id);
   if (existing && !confirm(moLabel(period) + " for " + building + " already exists. Replace it? Your saved statuses on it will be lost.")) return;
+  S.imp.rows.forEach(r => {
+    const m = r._fill && S.imp.marks && S.imp.marks[r._fill];
+    if (m && m.label) r.mark = { c: r._fill, t: m.label };
+    delete r._fill; delete r._row;
+  });
   const M = { id, building, period, rows: S.imp.rows, xlsxName: S.imp.xlsxName, summaryPage: (S.imp.summaryPage == null ? null : S.imp.summaryPage), savedAt: Date.now() };
   await dbPut("months", M);
   if (S.imp.map) await dbPut("kv", { k: "map|" + vkey(building), v: { map: S.imp.map, labels: S.imp.labels || null } });
@@ -1241,7 +1334,7 @@ function renderTable(){
     const dupe = dupeMsgs(r, i);
     const noteCls = r.status === "question" ? "note-q" : "note-h";
     return '<tr class="'+(r.status ? "st-"+r.status : "")+(i === S.sel ? " sel" : "")+'" onclick="selectRow('+i+')">'
-      + '<td>'+esc(r.vendor)+(dupe.length ? ' <span title="'+esc(dupe[0])+'" style="color:var(--red)">⧉</span>' : "")+((r.pages && r.pages.length > 1) ? ' <span title="This line has '+r.pages.length+' backup pages" style="font-size:10.5px;color:var(--tx2);background:#efede6;border-radius:8px;padding:0 6px;white-space:nowrap">📎'+r.pages.length+'</span>' : '')+'</td>'
+      + '<td>'+(r.mark ? '<span title="'+esc(r.mark.t)+'" style="display:inline-block;width:9px;height:9px;border-radius:50%;border:1px solid rgba(0,0,0,.35);background:#'+esc(r.mark.c)+';margin-right:5px;vertical-align:middle"></span>' : '')+esc(r.vendor)+(dupe.length ? ' <span title="'+esc(dupe[0])+'" style="color:var(--red)">⧉</span>' : "")+((r.pages && r.pages.length > 1) ? ' <span title="This line has '+r.pages.length+' backup pages" style="font-size:10.5px;color:var(--tx2);background:#efede6;border-radius:8px;padding:0 6px;white-space:nowrap">📎'+r.pages.length+'</span>' : '')+'</td>'
       + '<td class="rowmeta">'+esc(r.inv)+'</td><td class="rowmeta">'+esc(r.date)+'</td>'
       + '<td style="text-align:right;font-weight:500;white-space:nowrap">$'+fmt(r.amount)+tag+'</td>'
       + '<td class="desc-cell rowmeta" title="'+esc(r.desc)+'">'+esc(r.desc)+'</td>'
@@ -1322,7 +1415,8 @@ function renderRight(){
     + '<div><b>'+esc(r.vendor)+'</b><div class="rowmeta">'+esc([r.inv && ("#" + r.inv), r.date, r.gl].filter(Boolean).join(" · "))+'</div></div>'
     + '<div style="text-align:right"><div style="font-size:20px;font-weight:600;white-space:nowrap">$'+fmt(r.amount)+'</div>'
     + (r.base != null ? '<div class="rowmeta" style="white-space:nowrap">$'+fmt(r.base)+(r.hst != null ? ' + $'+fmt(r.hst)+' tax' : '')+'</div>' : '') + '</div></div>'
-    + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "");
+    + (r.desc ? '<div style="margin-top:8px;background:#fdf9ec;border:1px solid #ead9a8;border-radius:6px;padding:8px 11px;font-size:14px;line-height:1.55;color:#3d3005"><span style="font-size:11px;font-weight:600;color:#8a6d1a;letter-spacing:.03em;display:block;margin-bottom:2px">WHAT THIS IS FOR</span>'+esc(r.desc)+'</div>' : "")
+    + (r.mark ? '<div style="margin-top:8px;display:flex;align-items:center;gap:7px;font-size:13px"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.35);background:#'+esc(r.mark.c)+'"></span><b>'+esc(r.mark.t)+'</b> <span class="muted small">— marked on the spreadsheet</span></div>' : "");
   S._histRefs = [];
   const cells = [];
   const seenH = new Set();
